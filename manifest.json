@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "locale": "en_US.UTF-8",
+  "metadata": {
+    "appmode": "python-dash",
+    "entrypoint": "app"
+  },
+  "python": {
+    "version": "3.13.7",
+    "package_manager": {
+      "name": "pip",
+      "version": "25.3",
+      "package_file": "requirements.txt"
+    }
+  },
+  "files": {
+    "requirements.txt": {
+      "checksum": "af1dabdeaae84059f8558ccddc8abb52"
+    },
+    "app.py": {
+      "checksum": "4347d96afd2508cd4e47c4d4611698d9"
+    },
+    "data/project_summary.csv": {
+      "checksum": "d43c5416ce2673491977c55ab52673f3"
+    },
+    "data/quality_report.csv": {
+      "checksum": "6c0a3ecff2536ac3537e0b9c237eee45"
+    },
+    "data/timesheet.csv": {
+      "checksum": "f8612aa97617b38ba6404ac946b3b687"
+    },
+    "generate_dummy_data.py": {
+      "checksum": "e9f0e6c353662dbf31aeb7ea1d3311fe"
+    }
+  }
+}
