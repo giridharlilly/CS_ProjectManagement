@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "locale": "en_US.UTF-8",
+  "metadata": {
+    "appmode": "python-dash",
+    "entrypoint": "app"
+  },
+  "python": {
+    "version": "3.13.7",
+    "package_manager": {
+      "name": "pip",
+      "version": "25.3",
+      "package_file": "requirements.txt"
+    }
+  },
+  "files": {
+    "requirements.txt": {
+      "checksum": "576dc7d6fa1233ba8270017f00fbbd94"
+    },
+    ".env": {
+      "checksum": "c050b8dd018625c74816c1978feeb213"
+    },
+    ".gitignore": {
+      "checksum": "b1ac8098e4491e13bc07e667396806f2"
+    },
+    "app.py": {
+      "checksum": "fa2e6bdba5c5990589a6dd8f8efb39eb"
+    },
+    "db_connection.py": {
+      "checksum": "fd981e01702c848d6539bcf2bc12dd48"
+    },
+    "db_operations.py": {
+      "checksum": "2108ae6169f7072b9fdf0b811926b5f2"
+    },
+    "test_connection.py": {
+      "checksum": "6fa9e36ec38a97e0554ec1e47ab6579c"
+    }
+  }
+}
