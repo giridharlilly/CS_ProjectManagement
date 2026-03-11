@@ -2,7 +2,12 @@
 db_operations.py
 ================
 CRUD operations for the Medical Creatives app.
-Tables: Projects, ResourceUtilization, and Lookup tables.
+All data is stored in the Lakehouse Tables/ folder so it's visible in Power BI.
+
+Tables:
+  - Tables/Lookups/         → dropdown values
+  - Tables/Projects/        → project data
+  - Tables/ResourceUtilization/ → resource tracking data
 """
 
 import os
@@ -11,12 +16,12 @@ import logging
 from datetime import datetime, timezone
 
 import pandas as pd
-from db_connection import read_file_table, write_table, append_row, test_connection
+from db_connection import read_table, write_table, append_row, test_connection
 
 logger = logging.getLogger(__name__)
 APP_USER = os.getenv("APP_USER", "unknown")
 
-# ── Table paths (stored in Files/app_data/) ───────────────────────────
+# ── Table names (stored in Tables/ folder) ────────────────────────────
 PROJECTS_TABLE = "Projects"
 RESOURCE_TABLE = "ResourceUtilization"
 LOOKUPS_TABLE = "Lookups"
@@ -37,8 +42,7 @@ def _get_cached(table_name, force_refresh=False):
     if not force_refresh and table_name in _cache and (now - _cache_ts.get(table_name, 0)) < CACHE_TTL:
         return _cache[table_name].copy()
 
-    path = f"Files/app_data/{table_name}.parquet"
-    df = read_file_table(path)
+    df = read_table(table_name)
     _cache[table_name] = df
     _cache_ts[table_name] = now
     return df.copy()

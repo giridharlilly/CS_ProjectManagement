@@ -2,7 +2,13 @@
 db_connection.py
 ================
 Connects to Microsoft Fabric Lakehouse via OneLake HTTPS API.
-Reads/writes parquet files directly — no port 1433 needed.
+Writes to the Tables folder so data appears in the SQL analytics endpoint
+and Power BI can query it directly.
+
+Data paths:
+  - Tables/Lookups/          → dropdown values (visible in Power BI)
+  - Tables/Projects/         → project data (visible in Power BI)
+  - Tables/ResourceUtilization/ → resource data (visible in Power BI)
 """
 
 import os
@@ -103,7 +109,7 @@ def _read_file(path):
 def read_table(table_name):
     """
     Read a table from the Lakehouse Tables folder.
-    Returns a pandas DataFrame.
+    Reads all parquet files in Tables/{table_name}/ and returns a DataFrame.
     """
     table_path = f"Tables/{table_name}"
     files = _list_files(table_path)
@@ -125,19 +131,8 @@ def read_table(table_name):
     return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
 
 
-def read_file_table(file_path):
-    """
-    Read a parquet file from the Lakehouse Files folder.
-    Used for lookup/dropdown data stored in Files/lookups/.
-    """
-    data = _read_file(file_path)
-    if data is None:
-        return pd.DataFrame()
-    return pd.read_parquet(io.BytesIO(data))
-
-
 # ═══════════════════════════════════════════════════════════════════════
-#  WRITE OPERATIONS
+#  WRITE OPERATIONS — writes to Tables/ folder
 # ═══════════════════════════════════════════════════════════════════════
 
 def _upload_file(path, data_bytes):
@@ -175,7 +170,7 @@ def _delete_file(path):
     """Delete a file from OneLake."""
     url = f"{_onelake_base()}/{path}"
     try:
-        requests.delete(url, headers=_storage_headers(), timeout=30)
+        resp = requests.delete(url, headers=_storage_headers(), params={"recursive": "true"}, timeout=30)
     except Exception:
         pass
 
@@ -189,25 +184,30 @@ def _df_to_parquet_bytes(df):
 
 def write_table(table_name, df):
     """
-    Write/overwrite a table in the Lakehouse Files folder as a single parquet file.
-    Used for lookup tables and app-managed data.
+    Write/overwrite a table in the Lakehouse Tables folder.
+    Writes a single parquet file to: Tables/{table_name}/data.parquet
 
-    Files are stored in: Files/app_data/{table_name}.parquet
+    This makes the table visible in:
+    - Lakehouse SQL analytics endpoint
+    - Power BI
+    - Any SQL query tool
     """
-    path = f"Files/app_data/{table_name}.parquet"
+    # Delete existing data file first (overwrite)
+    _delete_file(f"Tables/{table_name}/data.parquet")
+
+    # Write new data
+    path = f"Tables/{table_name}/data.parquet"
     parquet_bytes = _df_to_parquet_bytes(df)
     _upload_file(path, parquet_bytes)
-    logger.info("Wrote %d rows to %s", len(df), path)
+    logger.info("Wrote %d rows to Tables/%s", len(df), table_name)
 
 
 def append_row(table_name, row_dict):
     """
     Append a single row to an existing table.
-    Reads current data, appends the row, writes back.
+    Reads current data from Tables folder, appends the row, writes back.
     """
-    path = f"Files/app_data/{table_name}.parquet"
-    existing = read_file_table(path)
-
+    existing = read_table(table_name)
     new_row = pd.DataFrame([row_dict])
 
     if existing.empty:
@@ -234,7 +234,7 @@ def update_table(table_name, df):
 def test_connection():
     """Test OneLake connectivity."""
     try:
-        url = f"{_onelake_base()}/Files"
+        url = f"{_onelake_base()}/Tables"
         resp = requests.get(
             url,
             headers=_storage_headers(),
@@ -251,6 +251,7 @@ if __name__ == "__main__":
     print(f"Workspace:  {WORKSPACE_NAME}")
     print(f"Lakehouse:  {LAKEHOUSE_NAME}")
     print(f"Method:     OneLake HTTPS (port 443)")
+    print(f"Data path:  Tables/ (visible in Power BI)")
     print()
     if test_connection():
         print("SUCCESS - Connected to Lakehouse!")
