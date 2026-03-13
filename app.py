@@ -696,7 +696,7 @@ app.layout = html.Div([
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#  LAZY LOAD: Populate all dropdowns when tab is opened
+#  LAZY LOAD: Populate all dropdowns — single OneLake read
 # ═══════════════════════════════════════════════════════════════════════
 
 # Mapping: dropdown component ID → lookup field name
@@ -726,17 +726,31 @@ DROPDOWN_LOOKUP_MAP = {
 
 @callback(
     [Output(dd_id, "options") for dd_id in DROPDOWN_LOOKUP_MAP.keys()],
-    Input("tabs", "active_tab"),
+    [Input("proj-new-btn", "n_clicks"),
+     Input("res-new-btn", "n_clicks"),
+     Input("proj-refresh-btn", "n_clicks"),
+     Input("res-refresh-btn", "n_clicks")],
+    prevent_initial_call=True,
 )
-def load_all_dropdowns(active_tab):
-    """Load all dropdown options lazily when any tab is opened."""
+def load_all_dropdowns(n1, n2, n3, n4):
+    """
+    Load all dropdown options with a SINGLE OneLake read.
+    Only triggers when user clicks New Project, New Entry, or Refresh.
+    """
+    try:
+        from db_connection import read_table
+        df = read_table("Lookups")
+    except Exception:
+        df = pd.DataFrame()
+
     results = []
     for dd_id, lookup_name in DROPDOWN_LOOKUP_MAP.items():
-        try:
-            options = get_dropdown_options(lookup_name)
-        except Exception:
-            options = []
-        results.append(options)
+        if df.empty or "FieldName" not in df.columns:
+            results.append([])
+        else:
+            filtered = df[df["FieldName"] == lookup_name].sort_values("Value")
+            options = [{"label": v, "value": v} for v in filtered["Value"].tolist()]
+            results.append(options)
     return results
 
 
