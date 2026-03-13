@@ -31,11 +31,7 @@ app = dash.Dash(
 )
 server = app.server
 
-# ── Initialize default lookups on first run ───────────────────────────
-try:
-    initialize_default_lookups()
-except Exception as e:
-    print(f"Warning: Could not initialize lookups: {e}")
+# NOTE: No OneLake calls at startup — everything loads lazily via callbacks
 
 # ── Color Palette ─────────────────────────────────────────────────────
 COLORS = {
@@ -63,7 +59,7 @@ def make_field(label, component, width=4):
 def make_dropdown(field_id, lookup_name, placeholder="Select...", multi=False):
     return dcc.Dropdown(
         id=field_id,
-        options=get_dropdown_options(lookup_name),
+        options=[],
         placeholder=placeholder,
         multi=multi,
         className="mb-0",
@@ -697,6 +693,51 @@ app.layout = html.Div([
                 label_style={"fontWeight": "600"}),
     ]),
 ], style={"backgroundColor": COLORS["bg"], "minHeight": "100vh"})
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  LAZY LOAD: Populate all dropdowns when tab is opened
+# ═══════════════════════════════════════════════════════════════════════
+
+# Mapping: dropdown component ID → lookup field name
+DROPDOWN_LOOKUP_MAP = {
+    # Project Summary dropdowns
+    "proj-bu": "BU",
+    "proj-type": "ProjectType",
+    "proj-media": "ClassificationMedia",
+    "proj-tactic": "TacticType",
+    "proj-status": "InternalStatus",
+    "proj-assigner": "AssignerName",
+    "proj-designer": "DesignerAssigned",
+    "proj-qc": "QCReviewer",
+    "proj-mail": "MailSent",
+    "proj-stage": "TacticStage",
+    "proj-stakeholder": "Stakeholder",
+    "proj-complexity": "Complexity",
+    "proj-content-status": "ContentStatus",
+    "proj-rev1": "Revision1",
+    "proj-rev2": "Revision2",
+    "proj-rev3": "Revision3OrMore",
+    # Resource Utilization dropdowns
+    "res-bu": "BU",
+    "res-designer": "DesignerAssigned",
+}
+
+
+@callback(
+    [Output(dd_id, "options") for dd_id in DROPDOWN_LOOKUP_MAP.keys()],
+    Input("tabs", "active_tab"),
+)
+def load_all_dropdowns(active_tab):
+    """Load all dropdown options lazily when any tab is opened."""
+    results = []
+    for dd_id, lookup_name in DROPDOWN_LOOKUP_MAP.items():
+        try:
+            options = get_dropdown_options(lookup_name)
+        except Exception:
+            options = []
+        results.append(options)
+    return results
 
 
 # ═══════════════════════════════════════════════════════════════════════
