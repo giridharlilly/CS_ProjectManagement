@@ -2,17 +2,16 @@
 db_connection.py
 ================
 Connects to Microsoft Fabric Lakehouse via OneLake HTTPS API.
-Writes to the Tables folder so data appears in the SQL analytics endpoint
-and Power BI can query it directly.
+Writes to Tables/ folder so data appears in SQL analytics endpoint & Power BI.
 
 Data paths:
-  - Tables/Lookups/          → dropdown values (visible in Power BI)
-  - Tables/Projects/         → project data (visible in Power BI)
-  - Tables/ResourceUtilization/ → resource data (visible in Power BI)
+  Write: Tables/{table_name}/data.parquet
+  Read:  Tables/{table_name}/ (reads all parquet files)
 """
 
 import os
 import io
+import re
 import time
 import logging
 from datetime import datetime, timezone
@@ -77,6 +76,21 @@ def _onelake_base():
     return f"{ONELAKE_DFS}/{WORKSPACE_NAME}/{LAKEHOUSE_NAME}.Lakehouse"
 
 
+def _strip_guid_prefix(path):
+    """
+    OneLake _list_files returns paths with GUID prefix like:
+      4b9e705d-5d9f-41a9-85c0-f2671c131110/Tables/Lookups/data.parquet
+    But read/write URLs need just:
+      Tables/Lookups/data.parquet
+    This function strips the GUID prefix.
+    """
+    # Match pattern: GUID/Tables/... or GUID/Files/...
+    match = re.match(r'^[0-9a-f-]+/(Tables|Files)/(.*)', path)
+    if match:
+        return f"{match.group(1)}/{match.group(2)}"
+    return path
+
+
 # ═══════════════════════════════════════════════════════════════════════
 #  READ OPERATIONS
 # ═══════════════════════════════════════════════════════════════════════
@@ -110,13 +124,18 @@ def read_table(table_name):
     """
     Read a table from the Lakehouse Tables folder.
     Reads all parquet files in Tables/{table_name}/ and returns a DataFrame.
+    Handles the GUID prefix that OneLake returns in file listings.
     """
     table_path = f"Tables/{table_name}"
     files = _list_files(table_path)
-    parquet_files = [
-        f["name"] for f in files
-        if f["name"].endswith(".parquet") and not f.get("isDirectory")
-    ]
+
+    parquet_files = []
+    for f in files:
+        name = f.get("name", "")
+        if name.endswith(".parquet") and not f.get("isDirectory"):
+            # Strip GUID prefix for reading
+            clean_path = _strip_guid_prefix(name)
+            parquet_files.append(clean_path)
 
     if not parquet_files:
         return pd.DataFrame()
@@ -125,8 +144,11 @@ def read_table(table_name):
     for pf in parquet_files:
         file_bytes = _read_file(pf)
         if file_bytes:
-            df = pd.read_parquet(io.BytesIO(file_bytes))
-            dfs.append(df)
+            try:
+                df = pd.read_parquet(io.BytesIO(file_bytes))
+                dfs.append(df)
+            except Exception as e:
+                logger.warning("Could not read %s: %s", pf, e)
 
     return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
 
@@ -170,7 +192,7 @@ def _delete_file(path):
     """Delete a file from OneLake."""
     url = f"{_onelake_base()}/{path}"
     try:
-        resp = requests.delete(url, headers=_storage_headers(), params={"recursive": "true"}, timeout=30)
+        requests.delete(url, headers=_storage_headers(), params={"recursive": "true"}, timeout=30)
     except Exception:
         pass
 
@@ -185,14 +207,13 @@ def _df_to_parquet_bytes(df):
 def write_table(table_name, df):
     """
     Write/overwrite a table in the Lakehouse Tables folder.
-    Writes a single parquet file to: Tables/{table_name}/data.parquet
+    Writes to: Tables/{table_name}/data.parquet
 
     This makes the table visible in:
     - Lakehouse SQL analytics endpoint
     - Power BI
-    - Any SQL query tool
     """
-    # Delete existing data file first (overwrite)
+    # Delete existing data file first
     _delete_file(f"Tables/{table_name}/data.parquet")
 
     # Write new data
@@ -205,7 +226,7 @@ def write_table(table_name, df):
 def append_row(table_name, row_dict):
     """
     Append a single row to an existing table.
-    Reads current data from Tables folder, appends the row, writes back.
+    Reads current data, appends the row, writes back.
     """
     existing = read_table(table_name)
     new_row = pd.DataFrame([row_dict])
@@ -220,10 +241,7 @@ def append_row(table_name, row_dict):
 
 
 def update_table(table_name, df):
-    """
-    Replace entire table with new data.
-    Used for editing/deleting rows.
-    """
+    """Replace entire table with new data."""
     write_table(table_name, df)
 
 
@@ -255,5 +273,14 @@ if __name__ == "__main__":
     print()
     if test_connection():
         print("SUCCESS - Connected to Lakehouse!")
+
+        # Verify read works
+        from db_connection import read_table
+        df = read_table("Lookups")
+        if not df.empty:
+            print(f"\nLookups table: {len(df)} rows")
+            print(df.head())
+        else:
+            print("\nLookups table: empty or not yet created")
     else:
         print("FAILED - Check credentials.")
