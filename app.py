@@ -293,7 +293,7 @@ def open_proj_modal(view_clicks, edit_clicks, close_click):
 
 
 @callback(
-    [Output("proj-modal", "is_open", allow_duplicate=True), Output("proj-table-container", "children", allow_duplicate=True)],
+    [Output("proj-modal", "is_open", allow_duplicate=True), Output("proj-submit-msg", "children", allow_duplicate=True)],
     Input("proj-modal-save", "n_clicks"),
     [State("proj-selected-row-id", "data"),
      State({"type": "proj-edit-field", "index": ALL}, "value"),
@@ -305,20 +305,21 @@ def save_proj_edit(n_clicks, row_id, values, ids):
     for val, id_obj in zip(values, ids):
         col = id_obj["index"]
         if val: changes[col] = val
-    update_project(row_id, changes)
-    return False, build_proj_table()
+    result = update_project(row_id, changes)
+    color = "success" if result["status"] == "success" else "danger"
+    return False, dbc.Alert(f"{result['message']} Click Refresh to see changes.", color=color, duration=5000)
 
 
 # Delete Project
 @callback(
-    [Output("proj-delete-msg", "children"), Output("proj-table-container", "children", allow_duplicate=True)],
+    Output("proj-delete-msg", "children"),
     Input({"type": "proj-del-btn", "index": ALL}, "n_clicks"),
     prevent_initial_call=True)
 def del_proj(n_clicks):
-    if not ctx.triggered_id or not any(n_clicks): return dash.no_update, dash.no_update
+    if not ctx.triggered_id or not any(n_clicks): return dash.no_update
     row_id = ctx.triggered_id["index"]
     delete_project(row_id)
-    return dbc.Alert("Project deleted.", color="warning", duration=3000), build_proj_table()
+    return dbc.Alert("Project deleted. Click Refresh to update.", color="warning", duration=4000)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -462,16 +463,14 @@ def open_res_modal(view_clicks, edit_clicks, close_click):
 
 
 @callback(
-    [Output("res-modal", "is_open", allow_duplicate=True), Output("res-table-container", "children", allow_duplicate=True)],
+    [Output("res-modal", "is_open", allow_duplicate=True), Output("res-submit-msg", "children", allow_duplicate=True)],
     Input("res-modal-save", "n_clicks"),
     [State("res-selected-row-id", "data"), State({"type": "res-edit-field", "index": ALL}, "value"),
      State({"type": "res-edit-field", "index": ALL}, "id")],
     prevent_initial_call=True)
 def save_res_edit(n, row_id, values, ids):
     if not row_id or not values: return dash.no_update, dash.no_update
-    from db_operations import update_project  # reuse pattern
     changes = {id_obj["index"]: val for val, id_obj in zip(values, ids) if val}
-    # Update resource table directly
     df = get_all_resources(force_refresh=True)
     mask = df["RowID"] == row_id
     from datetime import datetime, timezone
@@ -483,16 +482,16 @@ def save_res_edit(n, row_id, values, ids):
     from db_connection import write_table
     write_table("ResourceUtilization", df)
     clear_cache("ResourceUtilization")
-    return False, build_res_table()
+    return False, dbc.Alert("Entry updated! Click Refresh to see changes.", color="success", duration=5000)
 
 
 @callback(
-    [Output("res-delete-msg", "children"), Output("res-table-container", "children", allow_duplicate=True)],
+    Output("res-delete-msg", "children"),
     Input({"type": "res-del-btn", "index": ALL}, "n_clicks"), prevent_initial_call=True)
 def del_res(n_clicks):
-    if not ctx.triggered_id or not any(n_clicks): return dash.no_update, dash.no_update
+    if not ctx.triggered_id or not any(n_clicks): return dash.no_update
     delete_resource(ctx.triggered_id["index"])
-    return dbc.Alert("Entry deleted.", color="warning", duration=3000), build_res_table()
+    return dbc.Alert("Entry deleted. Click Refresh to update.", color="warning", duration=4000)
 
 
 # ═══════════════════════════════════════════════════════════════════════
