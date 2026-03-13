@@ -476,6 +476,15 @@ def save_res_edit(n, row_id, values, ids):
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     for col, val in changes.items():
+        if col in df.columns:
+            col_dtype = df[col].dtype
+            try:
+                if pd.api.types.is_integer_dtype(col_dtype):
+                    val = int(float(val)) if val and str(val).strip() else 0
+                elif pd.api.types.is_float_dtype(col_dtype):
+                    val = float(val) if val and str(val).strip() else 0.0
+            except (ValueError, TypeError):
+                val = str(val)
         df.loc[mask, col] = val
     df.loc[mask, "UpdatedBy"] = os.getenv("APP_USER", "unknown")
     df.loc[mask, "UpdatedAt"] = now
