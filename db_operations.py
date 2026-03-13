@@ -1,13 +1,6 @@
 """
-db_operations.py
-================
-CRUD operations for the Medical Creatives app.
-Data stored in: Files/app_data/{table}.parquet
-
-Tables:
-  - Lookups.parquet          → dropdown values
-  - Projects.parquet         → project data
-  - ResourceUtilization.parquet → resource tracking
+db_operations.py - CRUD operations for Medical Creatives app.
+Data stored as Delta Lake tables in Files/delta/
 """
 
 import os
@@ -25,27 +18,19 @@ PROJECTS_TABLE = "Projects"
 RESOURCE_TABLE = "ResourceUtilization"
 LOOKUPS_TABLE = "Lookups"
 
-
-# ═══════════════════════════════════════════════════════════════════════
-#  DATA CACHE
-# ═══════════════════════════════════════════════════════════════════════
-
+# ── Cache ─────────────────────────────────────────────────────────────
 _cache = {}
 _cache_ts = {}
-CACHE_TTL = 300  # 5 minutes
-
+CACHE_TTL = 300
 
 def _get_cached(table_name, force_refresh=False):
-    """Read table with caching."""
     now = datetime.now().timestamp()
     if not force_refresh and table_name in _cache and (now - _cache_ts.get(table_name, 0)) < CACHE_TTL:
         return _cache[table_name].copy()
-
     df = read_table(table_name)
     _cache[table_name] = df
     _cache_ts[table_name] = now
     return df.copy()
-
 
 def clear_cache(table_name=None):
     if table_name:
@@ -55,84 +40,52 @@ def clear_cache(table_name=None):
         _cache.clear()
         _cache_ts.clear()
 
-
-# ═══════════════════════════════════════════════════════════════════════
-#  LOOKUP / DROPDOWN OPERATIONS
-# ═══════════════════════════════════════════════════════════════════════
-
+# ── Lookups ───────────────────────────────────────────────────────────
 def get_lookup_values(field_name):
     df = _get_cached(LOOKUPS_TABLE)
-    if df.empty or "FieldName" not in df.columns:
-        return []
+    if df.empty or "FieldName" not in df.columns: return []
     return df[df["FieldName"] == field_name].sort_values("Value")["Value"].tolist()
-
 
 def get_dropdown_options(field_name):
     return [{"label": v, "value": v} for v in get_lookup_values(field_name)]
 
-
 def save_lookup_values(field_name, values_list):
     df = _get_cached(LOOKUPS_TABLE, force_refresh=True)
-    if not df.empty:
-        df = df[df["FieldName"] != field_name]
-
+    if not df.empty: df = df[df["FieldName"] != field_name]
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    new_rows = pd.DataFrame({
-        "FieldName": [field_name] * len(values_list),
-        "Value": values_list,
-        "UpdatedBy": [APP_USER] * len(values_list),
-        "UpdatedAt": [now] * len(values_list),
-    })
-
-    combined = pd.concat([df, new_rows], ignore_index=True)
-    write_table(LOOKUPS_TABLE, combined)
+    new = pd.DataFrame({"FieldName": [field_name]*len(values_list), "Value": values_list,
+        "UpdatedBy": [APP_USER]*len(values_list), "UpdatedAt": [now]*len(values_list)})
+    write_table(LOOKUPS_TABLE, pd.concat([df, new], ignore_index=True))
     clear_cache(LOOKUPS_TABLE)
-
 
 def get_all_lookup_fields():
     df = _get_cached(LOOKUPS_TABLE)
-    if df.empty:
-        return []
-    return sorted(df["FieldName"].unique().tolist())
+    return sorted(df["FieldName"].unique().tolist()) if not df.empty else []
 
-
-# ═══════════════════════════════════════════════════════════════════════
-#  PROJECTS
-# ═══════════════════════════════════════════════════════════════════════
-
+# ── Projects ──────────────────────────────────────────────────────────
 def get_all_projects(force_refresh=False):
     return _get_cached(PROJECTS_TABLE, force_refresh)
 
-
 def submit_project(form_data):
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    form_data["RowID"] = str(uuid.uuid4())
-    form_data["CreatedBy"] = APP_USER
-    form_data["CreatedAt"] = now
-    form_data["UpdatedBy"] = APP_USER
-    form_data["UpdatedAt"] = now
+    form_data.update({"RowID": str(uuid.uuid4()), "CreatedBy": APP_USER, "CreatedAt": now,
+        "UpdatedBy": APP_USER, "UpdatedAt": now})
     form_data = {k: v for k, v in form_data.items() if v is not None}
-
     try:
         append_row(PROJECTS_TABLE, form_data)
         clear_cache(PROJECTS_TABLE)
-        return {"status": "success", "message": "Project saved successfully!"}
+        return {"status": "success", "message": "Project saved!"}
     except Exception as e:
-        return {"status": "error", "message": f"Failed to save: {str(e)}"}
-
+        return {"status": "error", "message": f"Failed: {e}"}
 
 def update_project(row_id, changes):
     df = _get_cached(PROJECTS_TABLE, force_refresh=True)
-    if df.empty:
-        return {"status": "error", "message": "No projects found"}
+    if df.empty: return {"status": "error", "message": "No projects"}
     mask = df["RowID"] == row_id
-    if mask.sum() == 0:
-        return {"status": "error", "message": f"Row {row_id} not found"}
-
+    if mask.sum() == 0: return {"status": "error", "message": "Not found"}
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     for col, val in changes.items():
         if col in df.columns:
-            # Convert value to match the column's dtype
             col_dtype = df[col].dtype
             try:
                 if pd.api.types.is_integer_dtype(col_dtype):
@@ -144,48 +97,36 @@ def update_project(row_id, changes):
         df.loc[mask, col] = val
     df.loc[mask, "UpdatedBy"] = APP_USER
     df.loc[mask, "UpdatedAt"] = now
-
     write_table(PROJECTS_TABLE, df)
     clear_cache(PROJECTS_TABLE)
     return {"status": "success", "message": "Project updated!"}
-
 
 def delete_project(row_id):
     df = _get_cached(PROJECTS_TABLE, force_refresh=True)
     df = df[df["RowID"] != row_id]
     write_table(PROJECTS_TABLE, df)
     clear_cache(PROJECTS_TABLE)
-    return {"status": "success", "message": "Project deleted!"}
+    return {"status": "success", "message": "Deleted!"}
 
-
-# ═══════════════════════════════════════════════════════════════════════
-#  RESOURCE UTILIZATION
-# ═══════════════════════════════════════════════════════════════════════
-
+# ── Resource Utilization ──────────────────────────────────────────────
 def get_all_resources(force_refresh=False):
     return _get_cached(RESOURCE_TABLE, force_refresh)
 
-
 def submit_resource(form_data):
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    form_data["RowID"] = str(uuid.uuid4())
-    form_data["CreatedBy"] = APP_USER
-    form_data["CreatedAt"] = now
-    form_data["UpdatedBy"] = APP_USER
-    form_data["UpdatedAt"] = now
+    form_data.update({"RowID": str(uuid.uuid4()), "CreatedBy": APP_USER, "CreatedAt": now,
+        "UpdatedBy": APP_USER, "UpdatedAt": now})
     form_data = {k: v for k, v in form_data.items() if v is not None}
-
     try:
         append_row(RESOURCE_TABLE, form_data)
         clear_cache(RESOURCE_TABLE)
-        return {"status": "success", "message": "Resource entry saved!"}
+        return {"status": "success", "message": "Entry saved!"}
     except Exception as e:
-        return {"status": "error", "message": f"Failed to save: {str(e)}"}
-
+        return {"status": "error", "message": f"Failed: {e}"}
 
 def delete_resource(row_id):
     df = _get_cached(RESOURCE_TABLE, force_refresh=True)
     df = df[df["RowID"] != row_id]
     write_table(RESOURCE_TABLE, df)
     clear_cache(RESOURCE_TABLE)
-    return {"status": "success", "message": "Entry deleted!"}
+    return {"status": "success", "message": "Deleted!"}
