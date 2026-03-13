@@ -33,7 +33,7 @@
       "checksum": "3b57c8d84803b03b83b9e70fbe00cb49"
     },
     "gunicorn.conf.py": {
-      "checksum": "516bc464351a44ac3ace6cde58c073eb"
+      "checksum": "271a1acb49f4e51f2f375065fc13ac22"
     },
     "test_connection.py": {
       "checksum": "6fa9e36ec38a97e0554ec1e47ab6579c"
