@@ -7,8 +7,6 @@ import os, json
 import dash
 from dash import dcc, html, dash_table, Input, Output, State, callback, ctx, ALL
 import dash_bootstrap_components as dbc
-import plotly.express as px
-import plotly.graph_objects as go
 import pandas as pd
 
 from db_operations import (
@@ -39,72 +37,9 @@ def make_inp(fid, t="text", ph=""):
 def make_dt(fid):
     return dcc.DatePickerSingle(id=fid, date=None, display_format="YYYY-MM-DD", className="w-100")
 
-def efig(msg="No data"):
-    fig = go.Figure()
-    fig.update_layout(annotations=[{"text": msg, "xref": "paper", "yref": "paper", "showarrow": False,
-        "font": {"size": 16, "color": "#94A3B8"}}], plot_bgcolor="white", paper_bgcolor="white",
-        xaxis={"visible": False}, yaxis={"visible": False}, height=300)
-    return fig
 
 # ═══════════════════════════════════════════════════════════════════════
-#  TAB 1: ANALYTICS (auto-loads on tab switch)
-# ═══════════════════════════════════════════════════════════════════════
-def tab_analytics():
-    return dbc.Container([
-        dbc.Row([
-            dbc.Col(html.H4("Analytics Dashboard", className="text-primary fw-bold"), md=8),
-            dbc.Col(dbc.Button("Refresh", id="analytics-refresh", color="primary", size="sm", className="float-end"), md=4),
-        ], className="mb-4 align-items-center"),
-        html.Div(id="analytics-kpis"),
-        dbc.Row([dbc.Col(dcc.Graph(id="chart-status"), md=6), dbc.Col(dcc.Graph(id="chart-bu"), md=6)], className="mb-3"),
-        dbc.Row([dbc.Col(dcc.Graph(id="chart-complexity"), md=6), dbc.Col(dcc.Graph(id="chart-timeline"), md=6)]),
-    ], fluid=True, className="py-3")
-
-@callback([Output("analytics-kpis", "children"), Output("chart-status", "figure"),
-    Output("chart-bu", "figure"), Output("chart-complexity", "figure"), Output("chart-timeline", "figure")],
-    [Input("analytics-refresh", "n_clicks"), Input("tabs", "active_tab")])
-def update_analytics(n, tab):
-    if tab != "tab-analytics" and not n: return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
-    df = get_all_projects(force_refresh=True)
-    total = len(df)
-    ip = len(df[df["InternalStatus"]=="In Progress"]) if not df.empty and "InternalStatus" in df.columns else 0
-    comp = len(df[df["InternalStatus"]=="Completed"]) if not df.empty and "InternalStatus" in df.columns else 0
-    oh = len(df[df["InternalStatus"]=="On Hold"]) if not df.empty and "InternalStatus" in df.columns else 0
-    kpis = dbc.Row([
-        dbc.Col(dbc.Card(dbc.CardBody([html.H2(total,className="text-primary fw-bold mb-0"),html.P("Total",className="text-muted small mb-0")]),className="shadow-sm"),md=3),
-        dbc.Col(dbc.Card(dbc.CardBody([html.H2(ip,className="text-warning fw-bold mb-0"),html.P("In Progress",className="text-muted small mb-0")]),className="shadow-sm"),md=3),
-        dbc.Col(dbc.Card(dbc.CardBody([html.H2(comp,className="text-success fw-bold mb-0"),html.P("Completed",className="text-muted small mb-0")]),className="shadow-sm"),md=3),
-        dbc.Col(dbc.Card(dbc.CardBody([html.H2(oh,className="text-danger fw-bold mb-0"),html.P("On Hold",className="text-muted small mb-0")]),className="shadow-sm"),md=3),
-    ],className="mb-4")
-    ef = efig()
-    if df.empty: return kpis,ef,ef,ef,ef
-    fs=ef
-    if "InternalStatus" in df.columns:
-        sc=df["InternalStatus"].value_counts().reset_index();sc.columns=["Status","Count"]
-        fs=px.pie(sc,names="Status",values="Count",title="By Status",color_discrete_sequence=px.colors.qualitative.Set2,hole=0.4)
-        fs.update_layout(height=300,margin=dict(t=40,b=20,l=20,r=20))
-    fb=ef
-    if "BU" in df.columns:
-        bc=df["BU"].value_counts().reset_index();bc.columns=["BU","Count"]
-        fb=px.bar(bc,x="BU",y="Count",title="By BU",color_discrete_sequence=[C["accent"]])
-        fb.update_layout(height=300,margin=dict(t=40,b=20,l=20,r=20),showlegend=False)
-    fc=ef
-    if "Complexity" in df.columns:
-        cc=df["Complexity"].value_counts().reset_index();cc.columns=["Complexity","Count"]
-        fc=px.pie(cc,names="Complexity",values="Count",title="By Complexity",color_discrete_sequence=["#10B981","#F59E0B","#EF4444"],hole=0.4)
-        fc.update_layout(height=300,margin=dict(t=40,b=20,l=20,r=20))
-    ft=ef
-    if "AssignedDate" in df.columns:
-        try:
-            df["AssignedDate"]=pd.to_datetime(df["AssignedDate"],errors="coerce")
-            tl=df.groupby(df["AssignedDate"].dt.to_period("M")).size().reset_index();tl.columns=["Month","Count"];tl["Month"]=tl["Month"].astype(str)
-            ft=px.line(tl,x="Month",y="Count",title="Over Time",markers=True,color_discrete_sequence=[C["accent"]])
-            ft.update_layout(height=300,margin=dict(t=40,b=20,l=20,r=20))
-        except:pass
-    return kpis,fs,fb,fc,ft
-
-# ═══════════════════════════════════════════════════════════════════════
-#  TAB 2: PROJECT SUMMARY
+#  TAB 1: PROJECT SUMMARY
 # ═══════════════════════════════════════════════════════════════════════
 def tab_project_summary():
     return dbc.Container([
@@ -437,8 +372,7 @@ def load_dd(n1,n2,n3,n4,tab):
 app.layout=html.Div([
     dbc.Navbar(dbc.Container([dbc.NavbarBrand([html.I(className="fas fa-palette me-2"),"Medical Creatives UT"],className="fw-bold text-white"),
         html.Span(f"User: {os.getenv('APP_USER','unknown')}",className="text-light small")],fluid=True),color=C["primary"],dark=True,className="mb-0"),
-    dbc.Tabs(id="tabs",active_tab="tab-analytics",className="px-3 pt-2",children=[
-        dbc.Tab(tab_analytics(),label="Analytics",tab_id="tab-analytics",label_style={"fontWeight":"600"}),
+    dbc.Tabs(id="tabs",active_tab="tab-projects",className="px-3 pt-2",children=[
         dbc.Tab(tab_project_summary(),label="Project Summary",tab_id="tab-projects",label_style={"fontWeight":"600"}),
         dbc.Tab(tab_resource(),label="Resource Utilization",tab_id="tab-resource",label_style={"fontWeight":"600"}),
         dbc.Tab(tab_settings(),label="Settings",tab_id="tab-settings",label_style={"fontWeight":"600"}),
