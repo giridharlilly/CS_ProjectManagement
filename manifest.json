@@ -24,16 +24,19 @@
       "checksum": "b1ac8098e4491e13bc07e667396806f2"
     },
     "app.py": {
-      "checksum": "1700fdde0921531cb6b11e4c1274f2da"
+      "checksum": "9731caefa851c316aaf8fbec0bdb34f2"
     },
     "db_connection.py": {
       "checksum": "399c2407d838ea536a4ef08492611794"
     },
     "db_operations.py": {
-      "checksum": "77a69683cfcacdb471c1d9391a0081da"
+      "checksum": "9c5261b31a6559ec6e20b20e3df97053"
     },
     "gunicorn.conf.py": {
       "checksum": "516bc464351a44ac3ace6cde58c073eb"
+    },
+    "test_connection.py": {
+      "checksum": "6fa9e36ec38a97e0554ec1e47ab6579c"
     }
   }
 }
