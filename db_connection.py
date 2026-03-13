@@ -2,23 +2,23 @@
 db_connection.py
 ================
 Connects to Microsoft Fabric Lakehouse via OneLake HTTPS API.
-Writes to Tables/ folder so data appears in SQL analytics endpoint & Power BI.
+
+Data is stored in Files/app_data/ as parquet files.
+To access from Power BI, use OneLake shortcut or direct parquet connection.
 
 Data paths:
-  Write: Tables/{table_name}/data.parquet
-  Read:  Tables/{table_name}/ (reads all parquet files)
+  - Files/app_data/Lookups.parquet
+  - Files/app_data/Projects.parquet
+  - Files/app_data/ResourceUtilization.parquet
 """
 
 import os
 import io
-import re
 import time
 import logging
-from datetime import datetime, timezone
 
 import requests
 import pandas as pd
-import pyarrow as pa
 import pyarrow.parquet as pq
 
 try:
@@ -38,6 +38,7 @@ LAKEHOUSE_NAME = os.getenv("FABRIC_LAKEHOUSE_NAME", "MC_ProjectManagement_LH")
 APP_USER = os.getenv("APP_USER", "unknown")
 
 ONELAKE_DFS = "https://onelake.dfs.fabric.microsoft.com"
+DATA_FOLDER = "Files/app_data"
 
 # ── Token Cache ───────────────────────────────────────────────────────
 _token_cache = {}
@@ -76,173 +77,107 @@ def _onelake_base():
     return f"{ONELAKE_DFS}/{WORKSPACE_NAME}/{LAKEHOUSE_NAME}.Lakehouse"
 
 
-def _strip_guid_prefix(path):
-    """
-    OneLake _list_files returns paths with GUID prefix like:
-      4b9e705d-5d9f-41a9-85c0-f2671c131110/Tables/Lookups/data.parquet
-    But read/write URLs need just:
-      Tables/Lookups/data.parquet
-    This function strips the GUID prefix.
-    """
-    # Match pattern: GUID/Tables/... or GUID/Files/...
-    match = re.match(r'^[0-9a-f-]+/(Tables|Files)/(.*)', path)
-    if match:
-        return f"{match.group(1)}/{match.group(2)}"
-    return path
+def _file_url(table_name):
+    return f"{_onelake_base()}/{DATA_FOLDER}/{table_name}.parquet"
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#  READ OPERATIONS
+#  READ
 # ═══════════════════════════════════════════════════════════════════════
-
-def _list_files(path):
-    """List files at an OneLake path."""
-    url = f"{_onelake_base()}/{path}"
-    resp = requests.get(
-        url,
-        headers=_storage_headers(),
-        params={"resource": "filesystem", "recursive": "true"},
-        timeout=30,
-    )
-    if resp.status_code == 404:
-        return []
-    resp.raise_for_status()
-    return resp.json().get("paths", [])
-
-
-def _read_file(path):
-    """Read a file from OneLake, returns bytes."""
-    url = f"{_onelake_base()}/{path}"
-    resp = requests.get(url, headers=_storage_headers(), timeout=60)
-    if resp.status_code == 404:
-        return None
-    resp.raise_for_status()
-    return resp.content
-
 
 def read_table(table_name):
     """
-    Read a table from the Lakehouse Tables folder.
-    Reads all parquet files in Tables/{table_name}/ and returns a DataFrame.
-    Handles the GUID prefix that OneLake returns in file listings.
+    Read a parquet file from Files/app_data/{table_name}.parquet.
+    Returns a pandas DataFrame.
     """
-    table_path = f"Tables/{table_name}"
-    files = _list_files(table_path)
-
-    parquet_files = []
-    for f in files:
-        name = f.get("name", "")
-        if name.endswith(".parquet") and not f.get("isDirectory"):
-            # Strip GUID prefix for reading
-            clean_path = _strip_guid_prefix(name)
-            parquet_files.append(clean_path)
-
-    if not parquet_files:
+    url = _file_url(table_name)
+    resp = requests.get(url, headers=_storage_headers(), timeout=60)
+    if resp.status_code == 404:
         return pd.DataFrame()
-
-    dfs = []
-    for pf in parquet_files:
-        file_bytes = _read_file(pf)
-        if file_bytes:
-            try:
-                df = pd.read_parquet(io.BytesIO(file_bytes))
-                dfs.append(df)
-            except Exception as e:
-                logger.warning("Could not read %s: %s", pf, e)
-
-    return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
+    resp.raise_for_status()
+    return pd.read_parquet(io.BytesIO(resp.content))
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#  WRITE OPERATIONS — writes to Tables/ folder
+#  WRITE
 # ═══════════════════════════════════════════════════════════════════════
 
-def _upload_file(path, data_bytes):
-    """Upload a file to OneLake (create + append + flush)."""
-    url = f"{_onelake_base()}/{path}"
+def write_table(table_name, df):
+    """
+    Write a DataFrame to Files/app_data/{table_name}.parquet.
+    Overwrites the existing file.
+    """
+    url = _file_url(table_name)
     headers = _storage_headers()
+
+    # Convert to parquet bytes
+    buf = io.BytesIO()
+    df.to_parquet(buf, index=False, engine="pyarrow")
+    parquet_bytes = buf.getvalue()
+
+    # Delete existing file (ignore if not found)
+    try:
+        requests.delete(url, headers=headers, timeout=15)
+    except Exception:
+        pass
 
     # Create file
     requests.put(
         url,
         headers={**headers, "Content-Length": "0"},
         params={"resource": "file"},
-        timeout=30,
+        timeout=15,
     ).raise_for_status()
 
-    # Append data
+    # Upload data
     requests.patch(
         url,
-        headers={**headers, "Content-Length": str(len(data_bytes)), "Content-Type": "application/octet-stream"},
+        headers={**headers, "Content-Length": str(len(parquet_bytes)),
+                 "Content-Type": "application/octet-stream"},
         params={"action": "append", "position": "0"},
-        data=data_bytes,
-        timeout=60,
+        data=parquet_bytes,
+        timeout=30,
     ).raise_for_status()
 
     # Flush
     requests.patch(
         url,
         headers=headers,
-        params={"action": "flush", "position": str(len(data_bytes))},
-        timeout=30,
+        params={"action": "flush", "position": str(len(parquet_bytes))},
+        timeout=15,
     ).raise_for_status()
 
-
-def _delete_file(path):
-    """Delete a file from OneLake."""
-    url = f"{_onelake_base()}/{path}"
-    try:
-        requests.delete(url, headers=_storage_headers(), params={"recursive": "true"}, timeout=30)
-    except Exception:
-        pass
-
-
-def _df_to_parquet_bytes(df):
-    """Convert DataFrame to parquet bytes."""
-    buf = io.BytesIO()
-    df.to_parquet(buf, index=False, engine="pyarrow")
-    return buf.getvalue()
-
-
-def write_table(table_name, df):
-    """
-    Write/overwrite a table in the Lakehouse Tables folder.
-    Writes to: Tables/{table_name}/data.parquet
-
-    This makes the table visible in:
-    - Lakehouse SQL analytics endpoint
-    - Power BI
-    """
-    # Delete existing data file first
-    _delete_file(f"Tables/{table_name}/data.parquet")
-
-    # Write new data
-    path = f"Tables/{table_name}/data.parquet"
-    parquet_bytes = _df_to_parquet_bytes(df)
-    _upload_file(path, parquet_bytes)
-    logger.info("Wrote %d rows to Tables/%s", len(df), table_name)
+    logger.info("Wrote %d rows to %s/%s.parquet", len(df), DATA_FOLDER, table_name)
 
 
 def append_row(table_name, row_dict):
-    """
-    Append a single row to an existing table.
-    Reads current data, appends the row, writes back.
-    """
+    """Append a single row. Reads existing data, appends, writes back."""
     existing = read_table(table_name)
     new_row = pd.DataFrame([row_dict])
-
-    if existing.empty:
-        combined = new_row
-    else:
-        combined = pd.concat([existing, new_row], ignore_index=True)
-
+    combined = pd.concat([existing, new_row], ignore_index=True) if not existing.empty else new_row
     write_table(table_name, combined)
     return len(combined)
 
 
 def update_table(table_name, df):
-    """Replace entire table with new data."""
+    """Replace entire table."""
     write_table(table_name, df)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  CLEANUP: Remove unidentified tables from Tables folder
+# ═══════════════════════════════════════════════════════════════════════
+
+def cleanup_tables_folder():
+    """Remove any files accidentally written to Tables/ folder."""
+    headers = _storage_headers()
+    base = _onelake_base()
+    for name in ["Lookups", "TestTable", "dbo/TestTable"]:
+        try:
+            requests.delete(f"{base}/Tables/{name}",
+                          headers=headers, params={"recursive": "true"}, timeout=15)
+        except Exception:
+            pass
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -252,10 +187,9 @@ def update_table(table_name, df):
 def test_connection():
     """Test OneLake connectivity."""
     try:
-        url = f"{_onelake_base()}/Tables"
+        url = f"{_onelake_base()}/Files"
         resp = requests.get(
-            url,
-            headers=_storage_headers(),
+            url, headers=_storage_headers(),
             params={"resource": "filesystem", "recursive": "false"},
             timeout=15,
         )
@@ -268,19 +202,15 @@ def test_connection():
 if __name__ == "__main__":
     print(f"Workspace:  {WORKSPACE_NAME}")
     print(f"Lakehouse:  {LAKEHOUSE_NAME}")
-    print(f"Method:     OneLake HTTPS (port 443)")
-    print(f"Data path:  Tables/ (visible in Power BI)")
+    print(f"Data path:  {DATA_FOLDER}/")
     print()
     if test_connection():
-        print("SUCCESS - Connected to Lakehouse!")
-
-        # Verify read works
-        from db_connection import read_table
+        print("SUCCESS - Connected!")
         df = read_table("Lookups")
         if not df.empty:
-            print(f"\nLookups table: {len(df)} rows")
+            print(f"Lookups: {len(df)} rows")
             print(df.head())
         else:
-            print("\nLookups table: empty or not yet created")
+            print("Lookups: empty")
     else:
-        print("FAILED - Check credentials.")
+        print("FAILED")
