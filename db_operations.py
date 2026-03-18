@@ -66,12 +66,39 @@ def get_all_lookup_fields():
 def get_all_projects(force_refresh=False):
     return _get_cached(PROJECTS_TABLE, force_refresh)
 
+# Numeric fields that should default to 0, not empty string
+NUMERIC_FIELDS = {
+    "PageSlide", "GDReworkPct", "POCReworkPct", "Asset", "Total", "Simple", "Medium",
+    "Complex", "Derivatives", "GDRework", "TotalAssets", "TotalGDRework",
+    "ProjectTaskNA", "StakeholderTouchpoints", "InternalTeamMeetings", "GCHTrainings",
+    "ToolsTechTesting", "InnovationProcessImprovement", "CrossFunctionalSupports",
+    "SiteGCHActivities", "TownhallsHRIT", "OneOne", "SuccessFactorLinkedIn",
+    "OtherTrainings", "HiringOnboarding", "LeavesHolidays", "OpenTime", "TotalHours",
+}
+
+def _clean_form_data(form_data):
+    """Replace None/empty with appropriate defaults: 0 for numeric, '' for text."""
+    cleaned = {}
+    for k, v in form_data.items():
+        if v is None or v == "":
+            cleaned[k] = 0 if k in NUMERIC_FIELDS else ""
+        else:
+            # Try to convert numeric fields to numbers
+            if k in NUMERIC_FIELDS:
+                try:
+                    cleaned[k] = float(v) if "." in str(v) else int(v)
+                except (ValueError, TypeError):
+                    cleaned[k] = 0
+            else:
+                cleaned[k] = v
+    return cleaned
+
+
 def submit_project(form_data):
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     form_data.update({"RowID": str(uuid.uuid4()), "CreatedBy": APP_USER, "CreatedAt": now,
         "UpdatedBy": APP_USER, "UpdatedAt": now})
-    # Keep ALL columns — replace None with empty string so schema stays consistent
-    form_data = {k: ("" if v is None else v) for k, v in form_data.items()}
+    form_data = _clean_form_data(form_data)
     try:
         append_row(PROJECTS_TABLE, form_data)
         clear_cache(PROJECTS_TABLE)
@@ -117,8 +144,7 @@ def submit_resource(form_data):
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     form_data.update({"RowID": str(uuid.uuid4()), "CreatedBy": APP_USER, "CreatedAt": now,
         "UpdatedBy": APP_USER, "UpdatedAt": now})
-    # Keep ALL columns — replace None with empty string so schema stays consistent
-    form_data = {k: ("" if v is None else v) for k, v in form_data.items()}
+    form_data = _clean_form_data(form_data)
     try:
         append_row(RESOURCE_TABLE, form_data)
         clear_cache(RESOURCE_TABLE)
