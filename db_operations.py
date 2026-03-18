@@ -70,7 +70,8 @@ def submit_project(form_data):
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     form_data.update({"RowID": str(uuid.uuid4()), "CreatedBy": APP_USER, "CreatedAt": now,
         "UpdatedBy": APP_USER, "UpdatedAt": now})
-    form_data = {k: v for k, v in form_data.items() if v is not None}
+    # Keep ALL columns — replace None with empty string so schema stays consistent
+    form_data = {k: ("" if v is None else v) for k, v in form_data.items()}
     try:
         append_row(PROJECTS_TABLE, form_data)
         clear_cache(PROJECTS_TABLE)
@@ -116,7 +117,8 @@ def submit_resource(form_data):
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     form_data.update({"RowID": str(uuid.uuid4()), "CreatedBy": APP_USER, "CreatedAt": now,
         "UpdatedBy": APP_USER, "UpdatedAt": now})
-    form_data = {k: v for k, v in form_data.items() if v is not None}
+    # Keep ALL columns — replace None with empty string so schema stays consistent
+    form_data = {k: ("" if v is None else v) for k, v in form_data.items()}
     try:
         append_row(RESOURCE_TABLE, form_data)
         clear_cache(RESOURCE_TABLE)

@@ -166,10 +166,27 @@ def _write_parquet_fallback(table_name, df):
 
 
 def append_row(table_name, row_dict):
-    """Append a single row. Reads existing, appends, writes back."""
+    """Append a single row. Ensures consistent schema across all rows."""
     existing = read_table(table_name)
     new_row = pd.DataFrame([row_dict])
-    combined = pd.concat([existing, new_row], ignore_index=True) if not existing.empty else new_row
+
+    if existing.empty:
+        combined = new_row
+    else:
+        # Ensure both DataFrames have the same columns
+        all_cols = list(dict.fromkeys(list(existing.columns) + list(new_row.columns)))
+        for col in all_cols:
+            if col not in existing.columns:
+                existing[col] = ""
+            if col not in new_row.columns:
+                new_row[col] = ""
+        # Reorder to match
+        new_row = new_row[all_cols]
+        existing = existing[all_cols]
+        combined = pd.concat([existing, new_row], ignore_index=True)
+
+    # Fill any NaN with empty string to prevent schema issues
+    combined = combined.fillna("")
     write_table(table_name, combined)
     return len(combined)
 
