@@ -113,7 +113,17 @@ def toggle_proj_form(n1, n2, n3, is_open):
     return False
 
 
-@callback([Output("proj-submit-msg", "children"), Output("proj-table-container", "children", allow_duplicate=True)],
+@callback([Output("proj-submit-msg", "children"), Output("proj-table-container", "children", allow_duplicate=True),
+    # Clear all form fields after submit
+    Output("proj-assigned-date", "date"), Output("proj-name", "value"), Output("proj-bu", "value"), Output("proj-id", "value"),
+    Output("proj-veeva-id", "value"), Output("proj-type", "value"), Output("proj-media", "value"), Output("proj-page-slide", "value"),
+    Output("proj-tactic", "value"), Output("proj-status", "value"), Output("proj-proof-due", "date"), Output("proj-assigner", "value"),
+    Output("proj-designer", "value"), Output("proj-qc", "value"), Output("proj-mail", "value"), Output("proj-qc-emailer", "value"),
+    Output("proj-stage", "value"), Output("proj-stakeholder", "value"), Output("proj-complexity", "value"), Output("proj-content-status", "value"),
+    Output("proj-rev1", "value"), Output("proj-rev2", "value"), Output("proj-rev3", "value"), Output("proj-comments", "value"),
+    Output("proj-gd-pct", "value"), Output("proj-poc-pct", "value"), Output("proj-asset", "value"), Output("proj-total", "value"),
+    Output("proj-simple", "value"), Output("proj-medium", "value"), Output("proj-complex", "value"), Output("proj-deriv", "value"),
+    Output("proj-gd-rework", "value"), Output("proj-poc-rework", "value"), Output("proj-total-assets", "value"), Output("proj-total-gd", "value")],
     Input("proj-submit-btn", "n_clicks"),
     [State("proj-assigned-date", "date"), State("proj-name", "value"), State("proj-bu", "value"), State("proj-id", "value"),
      State("proj-veeva-id", "value"), State("proj-type", "value"), State("proj-media", "value"), State("proj-page-slide", "value"),
@@ -126,8 +136,18 @@ def toggle_proj_form(n1, n2, n3, is_open):
      State("proj-gd-rework", "value"), State("proj-poc-rework", "value"), State("proj-total-assets", "value"), State("proj-total-gd", "value")],
     prevent_initial_call=True)
 def submit_proj(n, ad, name, bu, pid, vid, pt, media, ps, tactic, status, pf, assigner, designer, qc, mail, qce, stage, sh, comp, cs, r1, r2, r3, comments, gp, pp, asset, total, simple, med, cmplx, deriv, gr, pr, ta, tg):
+    # 34 form fields to clear = 34 None/empty values
+    empty = [None, "", None, "",
+             "", None, None, "",
+             None, None, None, None,
+             None, None, None, "",
+             None, None, None, None,
+             None, None, None, "",
+             "", "", "", "",
+             "", "", "", "",
+             "", "", "", ""]
     if not name:
-        return dbc.Alert("Project Name required.", color="danger", duration=3000), dash.no_update
+        return [dbc.Alert("Project Name required.", color="danger", duration=3000), dash.no_update] + [dash.no_update] * 34
     data = {"AssignedDate": ad, "ProjectName": name, "BU": bu, "ProjectID": pid, "VeevaID": vid, "ProjectType": pt,
         "ClassificationMedia": media, "PageSlide": ps, "TacticType": tactic, "InternalStatus": status,
         "FirstProofDue": pf, "AssignerName": assigner, "DesignerAssigned": designer, "QCReviewer": qc,
@@ -138,7 +158,8 @@ def submit_proj(n, ad, name, bu, pid, vid, pt, media, ps, tactic, status, pf, as
         "GDRework": gr, "POCRework": pr, "TotalAssets": ta, "TotalGDRework": tg}
     r = submit_project(data)
     msg = dbc.Alert(r["message"], color="success" if r["status"] == "success" else "danger", duration=4000)
-    return msg, dbc.Alert("Project saved! Click Refresh to see it in the table.", color="success", duration=5000)
+    table_msg = dbc.Alert("Project saved! Click Refresh to see it.", color="success", duration=5000)
+    return [msg, table_msg] + empty
 
 
 # Auto-load table on tab switch
@@ -474,7 +495,15 @@ def open_res_modal(day_clicks, close_click):
 
 # Submit resource entry
 @callback(
-    [Output("res-submit-msg", "children"), Output("res-modal", "is_open", allow_duplicate=True)],
+    [Output("res-submit-msg", "children"), Output("res-modal", "is_open", allow_duplicate=True),
+     # Clear all form fields after submit
+     Output("res-bu", "value", allow_duplicate=True), Output("res-designer", "value", allow_duplicate=True),
+     Output("res-manager", "value"), Output("res-proj-task", "value"), Output("res-stakeholder", "value"),
+     Output("res-meetings", "value"), Output("res-gch", "value"), Output("res-tools", "value"),
+     Output("res-innovation", "value"), Output("res-cross", "value"), Output("res-site", "value"),
+     Output("res-townhall", "value"), Output("res-oneone", "value"), Output("res-sf", "value"),
+     Output("res-other-train", "value"), Output("res-hiring", "value"), Output("res-leaves", "value"),
+     Output("res-open", "value"), Output("res-total-hours", "value")],
     Input("res-submit-btn", "n_clicks"),
     [State("res-selected-date", "data"), State("res-bu", "value"), State("res-designer", "value"),
      State("res-manager", "value"), State("res-proj-task", "value"), State("res-stakeholder", "value"),
@@ -492,7 +521,8 @@ def submit_res(n, dt, bu, des, mgr, pt, sh, mtg, gch, tools, innov, cross, site,
         "HiringOnboarding": hire, "LeavesHolidays": leave, "OpenTime": opn, "TotalHours": tot}
     r = submit_resource(data)
     msg = dbc.Alert(r["message"], color="success" if r["status"] == "success" else "danger", duration=4000)
-    return msg, False  # Close modal after submit
+    # Return: msg, close modal, then clear all 17 form fields
+    return [msg, False, None, None, "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""]
 
 
 # Delete resource entry
