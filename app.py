@@ -15,9 +15,9 @@ import calendar
 
 from db_operations import (
     get_all_projects, submit_project, update_project, delete_project,
-    get_all_resources, submit_resource, delete_resource,
+    get_all_resources, get_all_resources_unfiltered, submit_resource, delete_resource,
     get_dropdown_options, get_lookup_values, save_lookup_values,
-    get_all_lookup_fields, clear_cache, REVIEWER_EMAILS,
+    get_all_lookup_fields, clear_cache, REVIEWER_EMAILS, is_admin,
 )
 
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.FLATLY, dbc.icons.FONT_AWESOME],
@@ -386,7 +386,8 @@ def tab_resource():
             ], className="me-3")], md=4, className="text-center"),
             dbc.Col([
                 dbc.Button([html.I(className="fas fa-sync me-1"), "Refresh"], id="res-refresh-btn", color="secondary", size="sm", outline=True, className="me-2"),
-                dbc.Button([html.I(className="fas fa-table me-1"), "Manager View"], id="res-manager-btn", color="primary", size="sm"),
+                dbc.Button([html.I(className="fas fa-table me-1"), "Manager View"], id="res-manager-btn", color="primary", size="sm",
+                    style={"display": "inline-block"} if is_admin() else {"display": "none"}),
             ], md=4, className="text-end"),
         ], className="mb-3 align-items-center"),
         dcc.Store(id="cal-year", data=today.year), dcc.Store(id="cal-month", data=today.month),
@@ -448,7 +449,9 @@ def nav_m(p, nx, y, m):
 def build_cal(year, month, ref, tab):
     if tab != "tab-resource" and not ref: return dash.no_update, dash.no_update
     label = f"{calendar.month_name[month]} {year}"
-    df = get_all_resources(force_refresh=True)
+    # Only force refresh on explicit Refresh click, use cache for tab switch/month nav
+    force = bool(ref and ctx.triggered_id == "res-refresh-btn")
+    df = get_all_resources(force_refresh=force)
     ebd = {}
     if not df.empty and "Date" in df.columns:
         for _, row in df.iterrows():
@@ -487,7 +490,7 @@ def open_rm(dc, cc):
     if ctx.triggered_id == "res-modal-close": return False, "", None, ""
     t = ctx.triggered_id
     if not t or not isinstance(t, dict) or not any(c for c in dc if c): return [dash.no_update]*4
-    ds = t["index"]; df = get_all_resources()
+    ds = t["index"]; df = get_all_resources()  # uses cache, fast
     existing = []
     if not df.empty and "Date" in df.columns:
         de = df[df["Date"].astype(str).str.startswith(ds)]
@@ -519,6 +522,9 @@ def open_rm(dc, cc):
      State("res-other-train", "value"), State("res-hiring", "value"), State("res-leaves", "value"),
      State("res-open", "value"), State("res-total-hours", "value")], prevent_initial_call=True)
 def submit_r(n, dt, bu, des, mgr, pt, sh, mtg, gch, tools, innov, cross, site, town, oo, sf, ot, hire, leave, opn, tot):
+    # Validate required fields — prevent empty/dummy rows
+    if not bu or not des:
+        return [dbc.Alert("BU and Designer Name are required.", color="danger", duration=3000), dash.no_update] + [dash.no_update] * 17
     data = {"Date": dt, "BU": bu, "DesignerName": des, "ReportingManager": mgr, "ProjectTaskNA": pt,
         "StakeholderTouchpoints": sh, "InternalTeamMeetings": mtg, "GCHTrainings": gch, "ToolsTechTesting": tools,
         "InnovationProcessImprovement": innov, "CrossFunctionalSupports": cross, "SiteGCHActivities": site,
@@ -552,25 +558,114 @@ def toggle_mgr(n, o): return not o
     [State("cal-year", "data"), State("cal-month", "data")], prevent_initial_call=True)
 def load_mgr(o, y, m):
     if not o: return ""
-    df = get_all_resources(force_refresh=True)
+    df = get_all_resources_unfiltered(force_refresh=True)  # Manager sees ALL data
     if df.empty: return dbc.Alert("No data.", color="info")
     mp = f"{y}-{m:02d}"
+    mn = calendar.month_name[m]
     if "Date" in df.columns: df = df[df["Date"].astype(str).str.startswith(mp)]
-    if df.empty: return dbc.Alert(f"No entries for {calendar.month_name[m]} {y}.", color="info")
+    if df.empty: return dbc.Alert(f"No entries for {mn} {y}.", color="info")
+
     nc = ["ProjectTaskNA", "StakeholderTouchpoints", "InternalTeamMeetings", "GCHTrainings",
         "ToolsTechTesting", "InnovationProcessImprovement", "CrossFunctionalSupports", "SiteGCHActivities",
         "TownhallsHRIT", "OneOne", "SuccessFactorLinkedIn", "OtherTrainings", "HiringOnboarding", "LeavesHolidays", "OpenTime", "TotalHours"]
     for c in nc:
         if c in df.columns: df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+
+    content = []
+
+    # ── Summary Cards ──
     if "DesignerName" in df.columns and "TotalHours" in df.columns:
-        s = df.groupby("DesignerName").agg(Entries=("RowID", "count"), TotalHours=("TotalHours", "sum"),
-            Meetings=("InternalTeamMeetings", "sum"), Leaves=("LeavesHolidays", "sum")).reset_index()
-        return dbc.Table([html.Thead(html.Tr([html.Th(c, style=TH) for c in ["Designer", "Entries", "Hours", "Meetings", "Leaves"]])),
-            html.Tbody([html.Tr([html.Td(r["DesignerName"], className="small fw-bold"),
-                html.Td(r["Entries"], className="small"), html.Td(f"{r['TotalHours']:.0f}h", className="small"),
-                html.Td(f"{r['Meetings']:.0f}h", className="small"), html.Td(f"{r['Leaves']:.0f}h", className="small")])
-                for _, r in s.iterrows()])], bordered=True, hover=True, size="sm")
-    return dbc.Alert("Missing columns.", color="warning")
+        total_entries = len(df)
+        total_hours = df["TotalHours"].sum()
+        total_leaves = df["LeavesHolidays"].sum() if "LeavesHolidays" in df.columns else 0
+        unique_designers = df["DesignerName"].nunique()
+
+        content.append(dbc.Row([
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H3(total_entries, className="text-primary fw-bold mb-0"),
+                html.Small("Total Entries", className="text-muted"),
+            ]), className="shadow-sm text-center"), md=3),
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H3(f"{total_hours:.0f}h", className="text-success fw-bold mb-0"),
+                html.Small("Total Hours", className="text-muted"),
+            ]), className="shadow-sm text-center"), md=3),
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H3(unique_designers, className="text-info fw-bold mb-0"),
+                html.Small("Team Members", className="text-muted"),
+            ]), className="shadow-sm text-center"), md=3),
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H3(f"{total_leaves:.0f}h", className="text-warning fw-bold mb-0"),
+                html.Small("Total Leaves", className="text-muted"),
+            ]), className="shadow-sm text-center"), md=3),
+        ], className="mb-3"))
+
+        # ── Summary by Designer ──
+        content.append(html.H6(f"Team Summary — {mn} {y}", className="text-primary fw-bold mt-3 mb-2"))
+        s = df.groupby("DesignerName").agg(
+            Entries=("RowID", "count"),
+            TotalHours=("TotalHours", "sum"),
+            ProjectTask=("ProjectTaskNA", "sum"),
+            Meetings=("InternalTeamMeetings", "sum"),
+            Stakeholder=("StakeholderTouchpoints", "sum"),
+            Leaves=("LeavesHolidays", "sum"),
+            OpenTime=("OpenTime", "sum"),
+        ).reset_index().sort_values("TotalHours", ascending=False)
+
+        content.append(dbc.Table([
+            html.Thead(html.Tr([html.Th(c, style=TH) for c in
+                ["Designer", "Days", "Total Hrs", "Project", "Meetings", "Stakeholder", "Leaves", "Open"]])),
+            html.Tbody([html.Tr([
+                html.Td(r["DesignerName"], className="small fw-bold"),
+                html.Td(r["Entries"], className="small"),
+                html.Td(f"{r['TotalHours']:.0f}h", className="small fw-bold"),
+                html.Td(f"{r['ProjectTask']:.0f}h", className="small"),
+                html.Td(f"{r['Meetings']:.0f}h", className="small"),
+                html.Td(f"{r['Stakeholder']:.0f}h", className="small"),
+                html.Td(f"{r['Leaves']:.0f}h", className="small"),
+                html.Td(f"{r['OpenTime']:.0f}h", className="small"),
+            ]) for _, r in s.iterrows()])
+        ], bordered=True, hover=True, size="sm", className="mb-3"))
+
+        # ── Detailed Entries ──
+        content.append(html.H6(f"All Entries — {mn} {y}", className="text-primary fw-bold mt-3 mb-2"))
+
+        detail_cols = ["Date", "BU", "DesignerName", "ReportingManager",
+            "ProjectTaskNA", "StakeholderTouchpoints", "InternalTeamMeetings",
+            "LeavesHolidays", "OpenTime", "TotalHours"]
+        display_headers = ["Date", "BU", "Designer", "Manager",
+            "Project", "Stakeholder", "Meetings", "Leaves", "Open", "Total"]
+
+        avail_cols = [c for c in detail_cols if c in df.columns]
+        avail_headers = [display_headers[i] for i, c in enumerate(detail_cols) if c in df.columns]
+
+        sorted_df = df[avail_cols].sort_values(["Date", "DesignerName"] if "Date" in df.columns else avail_cols[:1])
+
+        detail_rows = []
+        for _, r in sorted_df.iterrows():
+            cells = []
+            for col in avail_cols:
+                v = r.get(col, "")
+                if col == "Date":
+                    cells.append(html.Td(str(v)[:10], className="small"))
+                elif col == "TotalHours":
+                    cells.append(html.Td(f"{float(v or 0):.0f}h", className="small fw-bold"))
+                elif col in nc:
+                    cells.append(html.Td(f"{float(v or 0):.0f}", className="small"))
+                else:
+                    cells.append(html.Td(str(v), className="small"))
+            detail_rows.append(html.Tr(cells))
+
+        content.append(dbc.Table([
+            html.Thead(html.Tr([html.Th(h, style=TH) for h in avail_headers])),
+            html.Tbody(detail_rows),
+        ], bordered=True, hover=True, size="sm", responsive=True))
+
+        content.append(html.Small(f"Showing {len(df)} entries for {mn} {y}", className="text-muted"))
+
+    else:
+        content.append(dbc.Alert("Missing columns in data.", color="warning"))
+
+    return html.Div(content)
 
 
 # ═══════════════════════════════════════════════════════════════════════

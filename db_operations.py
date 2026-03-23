@@ -13,6 +13,31 @@ from db_connection import read_table, write_table, append_row, test_connection
 logger = logging.getLogger(__name__)
 APP_USER = os.getenv("APP_USER", "unknown")
 
+# ═══════════════════════════════════════════════════════════════════════
+#  ROW-LEVEL SECURITY (RLS)
+# ═══════════════════════════════════════════════════════════════════════
+# Admins/Managers can see ALL data. Others see only their own entries.
+# Set via environment variable: RLS_ADMINS=l034698,l045123,manager1
+# Designer name mapping: APP_USER_NAME maps user ID to designer name
+# e.g., APP_USER_NAME="Aswin VM"
+
+RLS_ADMINS = [x.strip().lower() for x in os.getenv("RLS_ADMINS", "").split(",") if x.strip()]
+APP_USER_NAME = os.getenv("APP_USER_NAME", "")  # Designer name for this user
+
+def is_admin():
+    """Check if current user is admin/manager (can see all data)."""
+    return APP_USER.lower() in RLS_ADMINS
+
+def apply_rls(df, name_column="DesignerAssigned"):
+    """Filter DataFrame based on RLS. Admins see all, others see their own."""
+    if is_admin() or df.empty:
+        return df
+    if not APP_USER_NAME:
+        return df  # No name mapping, show all (fallback)
+    if name_column in df.columns:
+        return df[df[name_column].str.strip().str.upper() == APP_USER_NAME.strip().upper()]
+    return df
+
 PROJECTS_TABLE = "Projects"
 RESOURCE_TABLE = "ResourceUtilization"
 LOOKUPS_TABLE = "Lookups"
@@ -165,7 +190,8 @@ def assign_qc_reviewer(designer_name):
 # ═══════════════════════════════════════════════════════════════════════
 
 def get_all_projects(force=False):
-    return _get_cached(PROJECTS_TABLE, force)
+    df = _get_cached(PROJECTS_TABLE, force)
+    return apply_rls(df, "DesignerAssigned")
 
 def submit_project(form_data):
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
@@ -266,9 +292,18 @@ def delete_project(row_id):
 # ═══════════════════════════════════════════════════════════════════════
 
 def get_all_resources(force_refresh=False):
+    df = _get_cached(RESOURCE_TABLE, force_refresh)
+    return apply_rls(df, "DesignerName")
+
+def get_all_resources_unfiltered(force_refresh=False):
+    """Manager view — returns ALL data regardless of RLS."""
     return _get_cached(RESOURCE_TABLE, force_refresh)
 
 def submit_resource(form_data):
+    # Backend validation — prevent empty/dummy rows
+    if not form_data.get("BU") or not form_data.get("DesignerName"):
+        return {"status": "error", "message": "BU and Designer Name are required."}
+
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     form_data.update({"RowID": str(uuid.uuid4()), "CreatedBy": APP_USER,
         "CreatedAt": now, "UpdatedBy": APP_USER, "UpdatedAt": now})
