@@ -195,7 +195,35 @@ _proj_states = [
     State("proj-total-assets", "value"), State("proj-total-gd", "value"), State("proj-total-poc", "value"),
 ]
 
-@callback([Output("proj-submit-msg", "children"), Output("proj-table-container", "children", allow_duplicate=True)],
+# All form field outputs to clear after submit
+_proj_clear_outputs = [
+    Output("proj-assigned-date", "date", allow_duplicate=True), Output("proj-name", "value", allow_duplicate=True),
+    Output("proj-bu", "value", allow_duplicate=True), Output("proj-id", "value", allow_duplicate=True),
+    Output("proj-veeva-id", "value", allow_duplicate=True), Output("proj-type", "value", allow_duplicate=True),
+    Output("proj-media", "value", allow_duplicate=True), Output("proj-page-slide", "value", allow_duplicate=True),
+    Output("proj-tactic", "value", allow_duplicate=True), Output("proj-status", "value", allow_duplicate=True),
+    Output("proj-proof-due", "date", allow_duplicate=True), Output("proj-assigner", "value", allow_duplicate=True),
+    Output("proj-designer", "value", allow_duplicate=True), Output("proj-qc", "value", allow_duplicate=True),
+    Output("proj-mail", "value", allow_duplicate=True), Output("proj-qc-emailer", "value", allow_duplicate=True),
+    Output("proj-stage", "value", allow_duplicate=True), Output("proj-stakeholder", "value", allow_duplicate=True),
+    Output("proj-complexity", "value", allow_duplicate=True), Output("proj-content-status", "value", allow_duplicate=True),
+    Output("proj-rev1", "value", allow_duplicate=True), Output("proj-rev2", "value", allow_duplicate=True),
+    Output("proj-rev3", "value", allow_duplicate=True), Output("proj-comments", "value", allow_duplicate=True),
+    Output("proj-r1-asset", "value", allow_duplicate=True),
+] + [Output(f"proj-r{i}-{f}", "value", allow_duplicate=True)
+     for i in range(1, 5) for f in ["simple", "medium", "complex", "deriv", "total", "gd", "poc"]
+] + [Output(f"proj-r{i}-{f}", "value", allow_duplicate=True)
+     for i in range(5, 12) for f in ["total", "gd", "poc"]
+] + [
+    Output("proj-gd-pct", "value", allow_duplicate=True), Output("proj-poc-pct", "value", allow_duplicate=True),
+    Output("proj-total-assets", "value", allow_duplicate=True), Output("proj-total-gd", "value", allow_duplicate=True),
+    Output("proj-total-poc", "value", allow_duplicate=True),
+]
+
+# Empty values for all 79 fields
+_proj_empty = [None, '', None, '', '', None, None, '', None, None, None, None, None, '', None, '', None, None, None, None, None, None, None, ''] + [''] * 55
+
+@callback([Output("proj-submit-msg", "children"), Output("proj-table-container", "children", allow_duplicate=True)] + _proj_clear_outputs,
     Input("proj-submit-btn", "n_clicks"), _proj_states, prevent_initial_call=True)
 def submit_p(n, ad, name, bu, pid, vid, pt, media, ps, tactic, status, pf, assigner, designer, qc, mail, qce,
     stage, sh, comp, cs, r1, r2, r3, comments, r1_asset,
@@ -204,7 +232,7 @@ def submit_p(n, ad, name, bu, pid, vid, pt, media, ps, tactic, status, pf, assig
     r5t, r5g, r5p, r6t, r6g, r6p, r7t, r7g, r7p, r8t, r8g, r8p, r9t, r9g, r9p, r10t, r10g, r10p, r11t, r11g, r11p,
     gd_pct, poc_pct, ta, tgd, tpoc):
     if not name:
-        return dbc.Alert("Project Name required.", color="danger", duration=3000), dash.no_update
+        return [dbc.Alert("Project Name required.", color="danger", duration=3000), dash.no_update] + [dash.no_update] * 79
     data = {
         "AssignedDate": ad, "ProjectName": name, "BU": bu, "ProjectID": pid, "VeevaID": vid, "ProjectType": pt,
         "ClassificationMedia": media, "PageSlide": ps, "TacticType": tactic, "InternalStatus": status,
@@ -226,7 +254,9 @@ def submit_p(n, ad, name, bu, pid, vid, pt, media, ps, tactic, status, pf, assig
     }
     r = submit_project(data)
     color = "success" if r["status"] == "success" else "danger"
-    return dbc.Alert(r["message"], color=color, duration=5000), dbc.Alert("Click Refresh to see changes.", color="info", duration=5000)
+    msg = dbc.Alert(r["message"] + " Click Refresh to see changes.", color=color, duration=6000)
+    table_msg = dbc.Alert("Project saved! Click Refresh.", color="success", duration=5000)
+    return [msg, table_msg] + _proj_empty
 
 
 @callback(Output("proj-table-container", "children"),
