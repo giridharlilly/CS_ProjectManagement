@@ -5,16 +5,6 @@ Resource Utilization: Calendar view, 20 fields from Medical_Creatives.xlsx
 Settings: Self-service dropdown management
 """
 
-# Add after: server = app.server
-@server.before_request
-def log_user():
-    from flask import request
-    print("=== HEADERS ===")
-    print("RStudio-Connect-Credentials:", request.headers.get("RStudio-Connect-Credentials"))
-    print("X-RStudio-Username:", request.headers.get("X-RStudio-Username"))
-    print("REMOTE_USER:", request.environ.get("REMOTE_USER"))
-    print("X-Forwarded-User:", request.headers.get("X-Forwarded-User"))
-
 import os
 import dash
 from dash import dcc, html, dash_table, Input, Output, State, callback, ctx, ALL
@@ -33,6 +23,16 @@ from db_operations import (
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.FLATLY, dbc.icons.FONT_AWESOME],
     suppress_callback_exceptions=True, title="Medical Creatives UT")
 server = app.server
+
+# Add after: server = app.server
+@server.before_request
+def log_user():
+    from flask import request
+    print("=== HEADERS ===")
+    print("RStudio-Connect-Credentials:", request.headers.get("RStudio-Connect-Credentials"))
+    print("X-RStudio-Username:", request.headers.get("X-RStudio-Username"))
+    print("REMOTE_USER:", request.environ.get("REMOTE_USER"))
+    print("X-Forwarded-User:", request.headers.get("X-Forwarded-User"))
 
 C = {"primary": "#1E2761", "accent": "#3B82F6", "success": "#10B981",
     "danger": "#EF4444", "bg": "#F8FAFC", "text": "#1E293B", "muted": "#64748B"}
