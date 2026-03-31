@@ -5,11 +5,15 @@ Resource Utilization: Calendar view, 20 fields from Medical_Creatives.xlsx
 Settings: Self-service dropdown management
 """
 
-# Add after line: server = app.server
-import os
-print("RSTUDIO_CONNECT_USER:", os.getenv("RSTUDIO_CONNECT_USER"))
-print("USER:", os.getenv("USER"))
-print("LOGNAME:", os.getenv("LOGNAME"))
+# Add after: server = app.server
+@server.before_request
+def log_user():
+    from flask import request
+    print("=== HEADERS ===")
+    print("RStudio-Connect-Credentials:", request.headers.get("RStudio-Connect-Credentials"))
+    print("X-RStudio-Username:", request.headers.get("X-RStudio-Username"))
+    print("REMOTE_USER:", request.environ.get("REMOTE_USER"))
+    print("X-Forwarded-User:", request.headers.get("X-Forwarded-User"))
 
 import os
 import dash
