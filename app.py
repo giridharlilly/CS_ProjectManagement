@@ -5,6 +5,12 @@ Resource Utilization: Calendar view, 20 fields from Medical_Creatives.xlsx
 Settings: Self-service dropdown management
 """
 
+# Add after line: server = app.server
+import os
+print("RSTUDIO_CONNECT_USER:", os.getenv("RSTUDIO_CONNECT_USER"))
+print("USER:", os.getenv("USER"))
+print("LOGNAME:", os.getenv("LOGNAME"))
+
 import os
 import dash
 from dash import dcc, html, dash_table, Input, Output, State, callback, ctx, ALL
