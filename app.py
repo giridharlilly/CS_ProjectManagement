@@ -3,9 +3,11 @@ app.py - Medical Creatives UT (Full Version)
 Project Summary: 80 columns from MDCL, 11 revision groups, auto QC assignment
 Resource Utilization: Calendar view, 20 fields from Medical_Creatives.xlsx
 Settings: Self-service dropdown management
+Security: User identity from Posit Connect header + AD group check + RLS
 """
 
 import os
+import json
 import dash
 from dash import dcc, html, dash_table, Input, Output, State, callback, ctx, ALL
 import dash_bootstrap_components as dbc
@@ -17,22 +19,73 @@ from db_operations import (
     get_all_projects, submit_project, update_project, delete_project,
     get_all_resources, get_all_resources_unfiltered, submit_resource, delete_resource,
     get_dropdown_options, get_lookup_values, save_lookup_values,
-    get_all_lookup_fields, clear_cache, REVIEWER_EMAILS, is_admin,
+    get_all_lookup_fields, clear_cache, REVIEWER_EMAILS,
+    is_admin, get_current_user, get_user_display_name, check_ad_group,
 )
 
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.FLATLY, dbc.icons.FONT_AWESOME],
     suppress_callback_exceptions=True, title="Medical Creatives UT")
 server = app.server
 
-# Add after: server = app.server
+# ═══════════════════════════════════════════════════════════════════════
+#  SECURITY: AD Group Check Middleware
+# ═══════════════════════════════════════════════════════════════════════
+# Checks every request — if user not in required AD group, shows Access Denied.
+# Set REQUIRED_AD_GROUP env var to enable (e.g., REQUIRED_AD_GROUP=BIA_POP_PRODUCT)
+# Leave empty to skip AD group check.
+
+_auth_cache = {}  # Cache AD checks to avoid calling adquery on every request
+
 @server.before_request
-def log_user():
-    from flask import request
-    print("=== HEADERS ===")
-    print("RStudio-Connect-Credentials:", request.headers.get("RStudio-Connect-Credentials"))
-    print("X-RStudio-Username:", request.headers.get("X-RStudio-Username"))
-    print("REMOTE_USER:", request.environ.get("REMOTE_USER"))
-    print("X-Forwarded-User:", request.headers.get("X-Forwarded-User"))
+def enforce_ad_group():
+    from flask import request, Response
+    creds = request.headers.get("RStudio-Connect-Credentials", "")
+    if not creds:
+        return  # Local development, skip check
+
+    try:
+        user_id = json.loads(creds).get("user", "")
+    except:
+        return
+
+    # Admins always allowed — even if not in the AD group
+    if user_id.lower() in [x.strip().lower() for x in os.getenv("RLS_ADMINS", "l034698,l010793").split(",") if x.strip()]:
+        return  # Admin, skip group check
+
+    required_group = os.getenv("REQUIRED_AD_GROUP", "")
+    if not required_group:
+        return  # No group check configured
+
+    # Cache the result for 5 minutes per user
+    cache_key = f"{user_id}:{required_group}"
+    now = datetime.now().timestamp()
+    if cache_key in _auth_cache:
+        result, ts = _auth_cache[cache_key]
+        if now - ts < 300:  # 5 min cache
+            if result:
+                return
+            else:
+                return Response(ACCESS_DENIED_HTML, status=403, content_type="text/html")
+
+    # Check AD group
+    authorized = check_ad_group(user_id, required_group)
+    _auth_cache[cache_key] = (authorized, now)
+
+    if not authorized:
+        return Response(ACCESS_DENIED_HTML, status=403, content_type="text/html")
+
+
+ACCESS_DENIED_HTML = """
+<!DOCTYPE html>
+<html><head><title>Access Denied</title></head>
+<body style="font-family:Arial; text-align:center; margin-top:100px; background:#F8FAFC;">
+<div style="max-width:500px; margin:auto; padding:40px; background:white; border-radius:12px; box-shadow:0 2px 10px rgba(0,0,0,0.1);">
+<h1 style="color:#EF4444; font-size:48px;">&#9888;</h1>
+<h2 style="color:#EF4444;">Access Denied</h2>
+<p style="color:#64748B; font-size:16px;">You do not have permission to access this application.</p>
+<p style="color:#94A3B8; font-size:14px;">Please request access to the required Active Directory group.<br>Contact your system administrator for assistance.</p>
+</div></body></html>
+"""
 
 C = {"primary": "#1E2761", "accent": "#3B82F6", "success": "#10B981",
     "danger": "#EF4444", "bg": "#F8FAFC", "text": "#1E293B", "muted": "#64748B"}
@@ -397,7 +450,7 @@ def tab_resource():
             dbc.Col([
                 dbc.Button([html.I(className="fas fa-sync me-1"), "Refresh"], id="res-refresh-btn", color="secondary", size="sm", outline=True, className="me-2"),
                 dbc.Button([html.I(className="fas fa-table me-1"), "Manager View"], id="res-manager-btn", color="primary", size="sm",
-                    style={"display": "inline-block"} if is_admin() else {"display": "none"}),
+                    style={"display": "none"}),  # Hidden by default, shown for admins via callback
             ], md=4, className="text-end"),
         ], className="mb-3 align-items-center"),
         dcc.Store(id="cal-year", data=today.year), dcc.Store(id="cal-month", data=today.month),
@@ -768,14 +821,58 @@ def load_dd(n1, n2, n3, n4, tab):
 app.layout = html.Div([
     dbc.Navbar(dbc.Container([
         dbc.NavbarBrand([html.I(className="fas fa-palette me-2"), "Medical Creatives UT"], className="fw-bold text-white"),
-        html.Span(f"User: {os.getenv('APP_USER', 'unknown')}", className="text-light small"),
+        html.Span(id="navbar-user-display", className="text-light small"),
     ], fluid=True), color=C["primary"], dark=True, className="mb-0"),
     dbc.Tabs(id="tabs", active_tab="tab-projects", className="px-3 pt-2", children=[
         dbc.Tab(tab_project_summary(), label="Project Summary", tab_id="tab-projects", label_style={"fontWeight": "600"}),
         dbc.Tab(tab_resource(), label="Resource Utilization", tab_id="tab-resource", label_style={"fontWeight": "600"}),
-        dbc.Tab(tab_settings(), label="Settings", tab_id="tab-settings", label_style={"fontWeight": "600"}),
+        dbc.Tab(html.Div(id="settings-tab-content"), label="Settings", tab_id="tab-settings",
+            id="settings-tab", label_style={"fontWeight": "600"}),
     ]),
 ], style={"backgroundColor": C["bg"], "minHeight": "100vh"})
+
+
+# Display authenticated user + control admin-only visibility
+@callback([Output("navbar-user-display", "children"),
+    Output("res-manager-btn", "style"),
+    Output("settings-tab-content", "children"),
+    Output("settings-tab", "disabled"),
+    Output("settings-tab", "label_style")],
+    Input("tabs", "active_tab"))
+def show_user_and_admin_controls(tab):
+    uid = get_current_user()
+    name = get_user_display_name(uid)
+    display = f"User: {uid}"
+    if name:
+        display = f"{name} ({uid})"
+
+    admin = is_admin(uid)
+
+    # Navbar user display
+    parts = [html.Span(display)]
+    if admin:
+        parts.append(dbc.Badge("Admin", color="warning", className="ms-2", style={"fontSize": "10px"}))
+
+    # Manager View button visibility
+    mgr_style = {"display": "inline-block"} if admin else {"display": "none"}
+
+    # Settings tab: show content for admins, access denied for others
+    if admin:
+        settings_content = tab_settings()
+        tab_disabled = False
+        tab_label_style = {"fontWeight": "600"}
+    else:
+        settings_content = dbc.Container([
+            html.Div([
+                html.H4("Access Restricted", className="text-danger mt-4"),
+                html.P("Settings tab is available to administrators only.", className="text-muted"),
+            ], className="text-center py-5"),
+        ], fluid=True)
+        tab_disabled = False  # Keep clickable but show restricted message
+        tab_label_style = {"fontWeight": "600", "color": "#94A3B8"}
+
+    return parts, mgr_style, settings_content, tab_disabled, tab_label_style
+
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=8050)
