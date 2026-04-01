@@ -455,8 +455,28 @@ def tab_resource():
         ], className="mb-3 align-items-center"),
         dcc.Store(id="cal-year", data=today.year), dcc.Store(id="cal-month", data=today.month),
         html.Div(id="cal-grid"),
-        dbc.Collapse(dbc.Card(dbc.CardBody([html.H5("Manager Summary", className="text-primary mb-3"),
-            html.Div(id="manager-summary-content")]), className="shadow-sm mt-3"), id="manager-collapse", is_open=False),
+        dbc.Collapse(dbc.Card(dbc.CardBody([
+            html.H5("Manager Summary", className="text-primary mb-3"),
+
+            # ── Filters (syncs with calendar month/year) ──
+            dbc.Row([
+                dbc.Col([dbc.Label("Designer", className="fw-semibold small text-muted mb-1"),
+                    dcc.Dropdown(id="mgr-filter-designer", placeholder="All designers", className="mb-0",
+                        style={"fontSize": "12px"})], md=4),
+                dbc.Col([dbc.Label("BU", className="fw-semibold small text-muted mb-1"),
+                    dcc.Dropdown(id="mgr-filter-bu", placeholder="All BUs", className="mb-0",
+                        style={"fontSize": "12px"})], md=3),
+                dbc.Col([dbc.Label(" ", className="small mb-1"),
+                    dbc.ButtonGroup([
+                        dbc.Button([html.I(className="fas fa-filter me-1"), "Apply"], id="mgr-apply-btn",
+                            color="primary", size="sm"),
+                        dbc.Button([html.I(className="fas fa-times me-1"), "Clear"], id="mgr-clear-btn",
+                            color="secondary", size="sm", outline=True),
+                    ], className="mt-1")], md=3),
+            ], className="mb-3"),
+            html.Hr(),
+            html.Div(id="manager-summary-content"),
+        ]), className="shadow-sm mt-3"), id="manager-collapse", is_open=False),
 
         # Entry Modal
         dbc.Modal([dbc.ModalHeader(dbc.ModalTitle(id="res-modal-title")),
@@ -617,16 +637,65 @@ def conf_dr(y, n, rid):
     State("manager-collapse", "is_open"), prevent_initial_call=True)
 def toggle_mgr(n, o): return not o
 
-@callback(Output("manager-summary-content", "children"), Input("manager-collapse", "is_open"),
-    [State("cal-year", "data"), State("cal-month", "data")], prevent_initial_call=True)
-def load_mgr(o, y, m):
-    if not o: return ""
-    df = get_all_resources_unfiltered(force_refresh=True)  # Manager sees ALL data
+# Populate filter dropdowns when manager view opens
+@callback([Output("mgr-filter-designer", "options"), Output("mgr-filter-bu", "options")],
+    Input("manager-collapse", "is_open"), prevent_initial_call=True)
+def init_mgr_filters(is_open):
+    if not is_open:
+        return dash.no_update, dash.no_update
+    df = get_all_resources_unfiltered()  # Use cache, fast
+    designers, bus = [], []
+    if not df.empty:
+        if "DesignerName" in df.columns:
+            designers = [{"label": d, "value": d} for d in sorted(df["DesignerName"].dropna().unique().tolist()) if d]
+        if "BU" in df.columns:
+            bus = [{"label": b, "value": b} for b in sorted(df["BU"].dropna().unique().tolist()) if b]
+    return designers, bus
+
+# Clear filters
+@callback([Output("mgr-filter-designer", "value"), Output("mgr-filter-bu", "value")],
+    Input("mgr-clear-btn", "n_clicks"), prevent_initial_call=True)
+def clear_mgr_filters(n):
+    return None, None
+
+# Load manager data — synced with calendar month/year + filters
+@callback(Output("manager-summary-content", "children"),
+    [Input("manager-collapse", "is_open"), Input("mgr-apply-btn", "n_clicks"),
+     Input("mgr-clear-btn", "n_clicks")],
+    [State("cal-year", "data"), State("cal-month", "data"),
+     State("mgr-filter-designer", "value"), State("mgr-filter-bu", "value")],
+    prevent_initial_call=True)
+def load_mgr(is_open, apply_n, clear_n, cal_y, cal_m, f_designer, f_bu):
+    if not is_open: return ""
+
+    # Use cache for Apply/Clear, no need to hit OneLake every time
+    df = get_all_resources_unfiltered()
     if df.empty: return dbc.Alert("No data.", color="info")
-    mp = f"{y}-{m:02d}"
-    mn = calendar.month_name[m]
-    if "Date" in df.columns: df = df[df["Date"].astype(str).str.startswith(mp)]
-    if df.empty: return dbc.Alert(f"No entries for {mn} {y}.", color="info")
+
+    mn = calendar.month_name[cal_m]
+
+    # Always filter by calendar's month/year
+    if "Date" in df.columns:
+        mp = f"{cal_y}-{cal_m:02d}"
+        df = df[df["Date"].astype(str).str.startswith(mp)]
+
+    if df.empty: return dbc.Alert(f"No entries for {mn} {cal_y}.", color="info")
+
+    # Apply dropdown filters (only if not Clear button)
+    if ctx.triggered_id != "mgr-clear-btn":
+        if f_designer and "DesignerName" in df.columns:
+            df = df[df["DesignerName"] == f_designer]
+        if f_bu and "BU" in df.columns:
+            df = df[df["BU"] == f_bu]
+
+    # Build filter description
+    filter_parts = [f"{mn} {cal_y}"]
+    if f_designer and ctx.triggered_id != "mgr-clear-btn": filter_parts.append(f"Designer: {f_designer}")
+    if f_bu and ctx.triggered_id != "mgr-clear-btn": filter_parts.append(f"BU: {f_bu}")
+    filter_label = " | ".join(filter_parts)
+
+    if df.empty:
+        return dbc.Alert(f"No entries found for: {filter_label}", color="info")
 
     nc = ["ProjectTaskNA", "StakeholderTouchpoints", "InternalTeamMeetings", "GCHTrainings",
         "ToolsTechTesting", "InnovationProcessImprovement", "CrossFunctionalSupports", "SiteGCHActivities",
@@ -635,6 +704,8 @@ def load_mgr(o, y, m):
         if c in df.columns: df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
 
     content = []
+
+    content.append(html.Small(f"Showing: {filter_label}", className="text-info fw-bold d-block mb-2"))
 
     # ── Summary Cards ──
     if "DesignerName" in df.columns and "TotalHours" in df.columns:
@@ -663,7 +734,7 @@ def load_mgr(o, y, m):
         ], className="mb-3"))
 
         # ── Summary by Designer ──
-        content.append(html.H6(f"Team Summary — {mn} {y}", className="text-primary fw-bold mt-3 mb-2"))
+        content.append(html.H6("Team Summary", className="text-primary fw-bold mt-3 mb-2"))
         s = df.groupby("DesignerName").agg(
             Entries=("RowID", "count"),
             TotalHours=("TotalHours", "sum"),
@@ -690,13 +761,13 @@ def load_mgr(o, y, m):
         ], bordered=True, hover=True, size="sm", className="mb-3"))
 
         # ── Detailed Entries ──
-        content.append(html.H6(f"All Entries — {mn} {y}", className="text-primary fw-bold mt-3 mb-2"))
+        content.append(html.H6("All Entries", className="text-primary fw-bold mt-3 mb-2"))
 
         detail_cols = ["Date", "BU", "DesignerName", "ReportingManager",
             "ProjectTaskNA", "StakeholderTouchpoints", "InternalTeamMeetings",
-            "LeavesHolidays", "OpenTime", "TotalHours"]
+            "GCHTrainings", "CrossFunctionalSupports", "LeavesHolidays", "OpenTime", "TotalHours"]
         display_headers = ["Date", "BU", "Designer", "Manager",
-            "Project", "Stakeholder", "Meetings", "Leaves", "Open", "Total"]
+            "Project", "Stakeholder", "Meetings", "GCH", "Cross Func", "Leaves", "Open", "Total"]
 
         avail_cols = [c for c in detail_cols if c in df.columns]
         avail_headers = [display_headers[i] for i, c in enumerate(detail_cols) if c in df.columns]
@@ -723,7 +794,7 @@ def load_mgr(o, y, m):
             html.Tbody(detail_rows),
         ], bordered=True, hover=True, size="sm", responsive=True))
 
-        content.append(html.Small(f"Showing {len(df)} entries for {mn} {y}", className="text-muted"))
+        content.append(html.Small(f"Showing {len(df)} entries", className="text-muted"))
 
     else:
         content.append(dbc.Alert("Missing columns in data.", color="warning"))
