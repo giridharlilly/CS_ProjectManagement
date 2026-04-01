@@ -1,41 +1,139 @@
 """
-db_operations.py — CRUD + QC Auto-Assignment
-=============================================
-Includes VBA macro logic: when InternalStatus = "Move to QC",
-auto-assign QC Reviewer with lowest count (excluding designer).
+db_operations.py — CRUD + QC Auto-Assignment + Secure Auth
+===========================================================
+Security:
+  - User identity from RStudio-Connect-Credentials header (tamper-proof)
+  - AD group check via adquery (server-side)
+  - Row-Level Security based on authenticated user
 """
 
-import os, uuid, logging
+import os, uuid, logging, subprocess, json
 from datetime import datetime, timezone
 import pandas as pd
 from db_connection import read_table, write_table, append_row, test_connection
 
 logger = logging.getLogger(__name__)
-APP_USER = os.getenv("APP_USER", "unknown")
 
 # ═══════════════════════════════════════════════════════════════════════
-#  ROW-LEVEL SECURITY (RLS)
+#  SECURE USER IDENTITY (from Posit Connect header)
 # ═══════════════════════════════════════════════════════════════════════
-# Admins/Managers can see ALL data. Others see only their own entries.
-# Set via environment variable: RLS_ADMINS=l034698,l045123,manager1
-# Designer name mapping: APP_USER_NAME maps user ID to designer name
-# e.g., APP_USER_NAME="Aswin VM"
+# User ID is extracted from RStudio-Connect-Credentials header per request.
+# Fallback to APP_USER env var for local development only.
 
-RLS_ADMINS = [x.strip().lower() for x in os.getenv("RLS_ADMINS", "").split(",") if x.strip()]
-APP_USER_NAME = os.getenv("APP_USER_NAME", "")  # Designer name for this user
+APP_USER_FALLBACK = os.getenv("APP_USER", "unknown")
 
-def is_admin():
-    """Check if current user is admin/manager (can see all data)."""
-    return APP_USER.lower() in RLS_ADMINS
+# User ID → Designer Name mapping
+# Set in env var as JSON: USER_NAME_MAP={"l034698":"Giridhar S","l045123":"Aswin VM"}
+# Or simple single-user mode: APP_USER_NAME=Aswin VM
+_user_name_map = {}
+try:
+    _user_name_map = json.loads(os.getenv("USER_NAME_MAP", "{}"))
+except:
+    pass
+APP_USER_NAME_SINGLE = os.getenv("APP_USER_NAME", "")
+
+# Admins who can see ALL data
+RLS_ADMINS = [x.strip().lower() for x in os.getenv("RLS_ADMINS", "l034698,l010793").split(",") if x.strip()]
+
+# AD group required to access the app (empty = no group check)
+REQUIRED_AD_GROUP = os.getenv("REQUIRED_AD_GROUP", "")
+
+
+def get_current_user():
+    """Get authenticated user ID from Flask request header.
+    Returns the real user ID set by Posit Connect (cannot be spoofed)."""
+    try:
+        from flask import request
+        creds = request.headers.get("RStudio-Connect-Credentials", "")
+        if creds:
+            data = json.loads(creds)
+            return data.get("user", APP_USER_FALLBACK)
+    except:
+        pass
+    return APP_USER_FALLBACK
+
+
+_name_cache = {}  # Cache AD name lookups
+
+def get_user_display_name(user_id=None):
+    """Get user's display name. Priority: USER_NAME_MAP > AD lookup > empty."""
+    if user_id is None:
+        user_id = get_current_user()
+
+    # 1. Check manual JSON map first (overrides everything)
+    if user_id in _user_name_map:
+        return _user_name_map[user_id]
+
+    # 2. Check cache
+    if user_id in _name_cache:
+        return _name_cache[user_id]
+
+    # 3. Auto-detect from AD via adquery
+    try:
+        result = subprocess.run(
+            ["adquery", "user", user_id],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            # Format: userid:x:uid:gid:Full Name:/home/dir:/bin/bash
+            parts = result.stdout.strip().split(":")
+            if len(parts) >= 5 and parts[4].strip():
+                ad_name = parts[4].strip().title()  # "giridhar s" → "Giridhar S"
+                _name_cache[user_id] = ad_name
+                logger.info("Auto-detected name for %s: %s", user_id, ad_name)
+                return ad_name
+    except Exception as e:
+        logger.warning("AD name lookup failed for %s: %s", user_id, e)
+
+    # 4. Fallback to single-user env var
+    if APP_USER_NAME_SINGLE:
+        return APP_USER_NAME_SINGLE
+
+    _name_cache[user_id] = ""
+    return ""
+
+
+def is_admin(user_id=None):
+    """Check if user is admin/manager."""
+    if user_id is None:
+        user_id = get_current_user()
+    return user_id.lower() in RLS_ADMINS
+
+
+def check_ad_group(user_id=None, group_name=None):
+    """Check if user belongs to an AD group via adquery.
+    Returns True if user is in the group, False otherwise.
+    On failure, denies access (secure default)."""
+    if user_id is None:
+        user_id = get_current_user()
+    if not group_name:
+        group_name = REQUIRED_AD_GROUP
+    if not group_name:
+        return True  # No group check configured
+    try:
+        result = subprocess.run(
+            ["adquery", "user", "-a", user_id],
+            capture_output=True, text=True, timeout=10
+        )
+        return group_name in result.stdout
+    except Exception as e:
+        logger.warning("AD group check failed for %s: %s — denying access", user_id, e)
+        return False  # Deny on failure
+
 
 def apply_rls(df, name_column="DesignerAssigned"):
     """Filter DataFrame based on RLS. Admins see all, others see their own."""
-    if is_admin() or df.empty:
+    user_id = get_current_user()
+    if is_admin(user_id) or df.empty:
         return df
-    if not APP_USER_NAME:
-        return df  # No name mapping, show all (fallback)
+    display_name = get_user_display_name(user_id)
+    if not display_name:
+        # Non-admin with no name mapping — show EMPTY for security
+        # Add their user ID to USER_NAME_MAP to fix this
+        logger.warning("User %s has no name mapping in USER_NAME_MAP — showing empty data", user_id)
+        return df.iloc[0:0]  # Return empty DataFrame with same columns
     if name_column in df.columns:
-        return df[df[name_column].str.strip().str.upper() == APP_USER_NAME.strip().upper()]
+        return df[df[name_column].str.strip().str.upper() == display_name.strip().upper()]
     return df
 
 PROJECTS_TABLE = "Projects"
@@ -112,7 +210,7 @@ def save_lookup_values(fn, vals):
     if not df.empty: df = df[df["FieldName"] != fn]
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     new = pd.DataFrame({"FieldName": [fn]*len(vals), "Value": vals,
-        "UpdatedBy": [APP_USER]*len(vals), "UpdatedAt": [now]*len(vals)})
+        "UpdatedBy": [get_current_user()]*len(vals), "UpdatedAt": [now]*len(vals)})
     write_table(LOOKUPS_TABLE, pd.concat([df, new], ignore_index=True))
     clear_cache(LOOKUPS_TABLE)
 
@@ -195,8 +293,8 @@ def get_all_projects(force=False):
 
 def submit_project(form_data):
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    form_data.update({"RowID": str(uuid.uuid4()), "CreatedBy": APP_USER,
-        "CreatedAt": now, "UpdatedBy": APP_USER, "UpdatedAt": now})
+    form_data.update({"RowID": str(uuid.uuid4()), "CreatedBy": get_current_user(),
+        "CreatedAt": now, "UpdatedBy": get_current_user(), "UpdatedAt": now})
 
     # Auto-assign QC when status is "Move to QC"
     if str(form_data.get("InternalStatus", "")).strip().upper() == "MOVE TO QC":
@@ -271,7 +369,7 @@ def update_project(row_id, changes):
                     val = float(val) if val and str(val).strip() else 0.0
             except: val = str(val)
         df.loc[mask, col] = val
-    df.loc[mask, "UpdatedBy"] = APP_USER
+    df.loc[mask, "UpdatedBy"] = get_current_user()
     df.loc[mask, "UpdatedAt"] = now
     write_table(PROJECTS_TABLE, df)
     clear_cache(PROJECTS_TABLE)
@@ -305,8 +403,8 @@ def submit_resource(form_data):
         return {"status": "error", "message": "BU and Designer Name are required."}
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    form_data.update({"RowID": str(uuid.uuid4()), "CreatedBy": APP_USER,
-        "CreatedAt": now, "UpdatedBy": APP_USER, "UpdatedAt": now})
+    form_data.update({"RowID": str(uuid.uuid4()), "CreatedBy": get_current_user(),
+        "CreatedAt": now, "UpdatedBy": get_current_user(), "UpdatedAt": now})
 
     # Auto-calculate TotalHours
     hour_fields = ["ProjectTaskNA", "StakeholderTouchpoints", "InternalTeamMeetings",
