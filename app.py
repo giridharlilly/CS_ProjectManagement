@@ -661,12 +661,11 @@ def clear_mgr_filters(n):
 # Load manager data — synced with calendar month/year + filters
 @callback(Output("manager-summary-content", "children"),
     [Input("manager-collapse", "is_open"), Input("mgr-apply-btn", "n_clicks"),
-     Input("mgr-clear-btn", "n_clicks")],
-    [State("cal-year", "data"), State("cal-month", "data"),
-     State("mgr-filter-designer", "value"), State("mgr-filter-bu", "value")],
+     Input("mgr-clear-btn", "n_clicks"), Input("cal-year", "data"), Input("cal-month", "data")],
+    [State("mgr-filter-designer", "value"), State("mgr-filter-bu", "value")],
     prevent_initial_call=True)
 def load_mgr(is_open, apply_n, clear_n, cal_y, cal_m, f_designer, f_bu):
-    if not is_open: return ""
+    if not is_open: return dash.no_update
 
     # Use cache for Apply/Clear, no need to hit OneLake every time
     df = get_all_resources_unfiltered()
